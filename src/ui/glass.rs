@@ -61,6 +61,19 @@ pub(super) fn glass_layers(backdrop: Option<(PathBuf, String)>, panel: &str, p: 
     layers
 }
 
+/// Cubic ease-out, the curve most entrances here use.
+pub(super) fn ease_out_cubic(t: f32) -> f32 {
+    1. - (1. - t.clamp(0., 1.)).powi(3)
+}
+
+/// An animation that waits `delay_ms`, then runs 0 to 1 over `dur_ms`:
+/// the progress its closure sees is already offset by the delay.
+pub(super) fn delayed(delay_ms: u64, dur_ms: u64) -> Animation {
+    let (delay, dur) = (delay_ms as f32, dur_ms.max(1) as f32);
+    Animation::new(Duration::from_millis(delay_ms + dur_ms))
+        .with_easing(move |t| ((t * (delay + dur) - delay) / dur).clamp(0., 1.))
+}
+
 /// Fade-and-rise entrance, delayed by `index` steps.
 pub(super) fn stagger(id: SharedString, index: usize, child: impl IntoElement) -> impl IntoElement {
     let delay = index as f32 * 0.08;

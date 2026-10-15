@@ -19,6 +19,16 @@ pub(super) enum Scope {
     User(String),
 }
 
+/// Whether `s` looks like a Wallhaven wallpaper id.
+pub(super) fn is_wallpaper_id(s: &str) -> bool {
+    (2..=16).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
+/// The small thumbnail URL for a wallpaper id (the id must be valid).
+pub(super) fn small_thumb_url(id: &str) -> String {
+    format!("https://th.wallhaven.cc/small/{}/{id}.jpg", &id[..2])
+}
+
 impl Scope {
     /// A whole query that is exactly one scope token.
     pub(super) fn parse(query: &str) -> Option<Scope> {
@@ -30,7 +40,8 @@ impl Scope {
         if let Some(id) = lower.strip_prefix("id:") {
             return id.parse().ok().map(Scope::Tag);
         }
-        if let Some(id) = q.strip_prefix("like:").filter(|v| !v.is_empty()) {
+        // Wallhaven ids are short and alphanumeric; anything else isn't one.
+        if let Some(id) = q.strip_prefix("like:").filter(|v| is_wallpaper_id(v)) {
             return Some(Scope::Like(id.to_owned()));
         }
         q.strip_prefix('@').filter(|v| !v.is_empty()).map(|u| Scope::User(u.to_owned()))
@@ -398,6 +409,15 @@ pub(super) fn without(query: &str, words: &[String]) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn like_ids_must_be_ids() {
+        assert_eq!(Scope::parse("like:abc123"), Some(Scope::Like("abc123".into())));
+        // Multibyte input used to be byte-sliced (and panic) when drawn.
+        assert_eq!(Scope::parse("like:a\u{e9}"), None);
+        assert_eq!(Scope::parse("like:a"), None);
+    }
+
     use super::{ChipKind, Scope, parse, promote, without};
 
     #[test]

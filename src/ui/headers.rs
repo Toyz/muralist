@@ -150,7 +150,14 @@ impl Muralist {
         );
 
         // Settings: a gear that idles slowly and spins up under the pointer.
-        let spin = if self.gear_hover { 1400 } else { 14000 };
+        // Its angle carries on across the change of speed instead of
+        // snapping back, so it's kept here rather than in an animation.
+        let turns_per_sec = if self.gear_hover { 1. / 1.4 } else { 1. / 14. };
+        let now = std::time::Instant::now();
+        self.gear_angle = (self.gear_angle
+            + now.duration_since(self.gear_tick).as_secs_f32().min(0.1) * turns_per_sec * std::f32::consts::TAU)
+            % std::f32::consts::TAU;
+        self.gear_tick = now;
         let gear = segmented_track(p).flex_none().child(
             div()
                 .id("open-settings")
@@ -163,11 +170,7 @@ impl Muralist {
                 .text_color(if self.gear_hover { p.fg } else { p.muted })
                 .hover(move |s| s.bg(with_alpha(p.accent, 0.2)))
                 .tooltip(|window, cx| Tooltip::new("Settings").build(window, cx))
-                .child(icon("settings").size_3p5().with_animation(
-                    SharedString::from(format!("gear-{spin}")),
-                    Animation::new(Duration::from_millis(spin)).repeat(),
-                    |i, t| i.rotate(percentage(t)),
-                ))
+                .child(icon("settings").size_3p5().rotate(radians(self.gear_angle)))
                 .on_hover(cx.listener(|this, over: &bool, _, cx| {
                     this.gear_hover = *over;
                     cx.notify();
@@ -293,12 +296,10 @@ impl Muralist {
                                         colors.iter().take(6).enumerate().map(|(i, c)| {
                                             div().w(px(9.)).h(px(4.)).rounded_sm().bg(*c).with_animation(
                                                 SharedString::from(format!("swatch-{key}-{i}")),
-                                                Animation::new(Duration::from_millis(220 + i as u64 * 70))
-                                                    .with_easing(ease_out_quint()),
-                                                move |d, t| {
-                                                    let t = ((t * (220. + i as f32 * 70.) - i as f32 * 70.) / 220.)
-                                                        .clamp(0., 1.);
-                                                    d.w(px(9. * t)).opacity(t)
+                                                super::glass::delayed(i as u64 * 70, 220),
+                                                |d, t| {
+                                                    let e = super::glass::ease_out_cubic(t);
+                                                    d.w(px(9. * e)).opacity(e)
                                                 },
                                             )
                                         }),

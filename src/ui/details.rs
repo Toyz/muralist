@@ -160,7 +160,12 @@ impl Muralist {
         let caption = match hovered.and_then(|i| palette.get(i)) {
             Some((rgb, share)) => {
                 let c: Rgba = rgb_hsla(*rgb).into();
-                let hex = format!("#{:02x}{:02x}{:02x}", (c.r * 255.) as u8, (c.g * 255.) as u8, (c.b * 255.) as u8);
+                let hex = format!(
+                    "#{:02x}{:02x}{:02x}",
+                    (c.r * 255.).round() as u8,
+                    (c.g * 255.).round() as u8,
+                    (c.b * 255.).round() as u8
+                );
                 format!("{:.0}% of the image  ·  {hex}  ·  click to find this color", share * 100.)
             }
             None => "Hover a band to X-ray where that color lives".into(),

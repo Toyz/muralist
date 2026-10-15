@@ -42,6 +42,9 @@ fn readout(
         // A tick down the left edge, like a gauge.
         .child(div().absolute().left_0().top(px(10.)).bottom(px(10.)).w(px(2.)).rounded_full().bg(c))
         .child(head);
+    // Distinct ids for waiting and counting, or the count would inherit the
+    // pulse's start time and land without counting.
+    let id = SharedString::from(format!("{id}-{}", if value.is_some() { "n" } else { "p" }));
     match value {
         Some(v) => card
             .child(div().text_size(px(20.)).line_height(px(22.)).font_weight(FontWeight::BOLD).with_animation(

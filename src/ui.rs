@@ -1004,6 +1004,8 @@ pub struct Muralist {
     /// Tag id -> (name, category); `None` while fetching or if it failed.
     /// Tags by id, as fetched or seen; `None` while a fetch is out.
     tag_names: HashMap<u64, Option<crate::wallhaven::Tag>>,
+    /// When a tag lookup last failed, to retry it later rather than never.
+    tag_failed: HashMap<u64, Instant>,
     /// Query text of the last search sent, and a counter for type-ahead debounce.
     last_query: String,
     type_gen: u64,
@@ -1013,6 +1015,8 @@ pub struct Muralist {
     last_rotation: Instant,
     /// The pointer is over the settings gear, which spins up.
     gear_hover: bool,
+    gear_angle: f32,
+    gear_tick: Instant,
     /// Which Info/Similar dossier the pointer is on.
     dossier_hover: Option<u8>,
     /// Wallhaven has challenged a `like:` search this session.
@@ -1281,6 +1285,7 @@ impl Muralist {
             xray: None,
             similar: HashMap::new(),
             tag_names: HashMap::new(),
+            tag_failed: HashMap::new(),
             last_query: String::new(),
             type_gen: 0,
             search_focused: false,
@@ -1288,6 +1293,8 @@ impl Muralist {
             rotating: false,
             last_rotation: Instant::now(),
             gear_hover: false,
+            gear_angle: 0.,
+            gear_tick: Instant::now(),
             dossier_hover: None,
             like_blocked: false,
             similar_query: HashMap::new(),

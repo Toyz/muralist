@@ -271,19 +271,9 @@ impl Muralist {
         let job = Job {
             backend: self.backend.clone(),
             client: self.client.clone(),
-            params: SearchParams {
-                query: self.query.read(cx).value().to_string(),
-                categories: self.categories,
-                purity: self.purity,
-                sorting: Sorting::Random,
-                top_range: self.top_range.clone(),
-                ratios: None,
-                atleast: self.atleast.clone(),
-                resolutions: self.resolutions.clone(),
-                color: None,
-                page: 1,
-                seed: None,
-            },
+            // The search as the grid runs it (smart query, scope, color,
+            // shape), only shuffled.
+            params: SearchParams { sorting: Sorting::Random, page: 1, seed: None, ..self.current_search(cx).2 },
             monitors: self.monitors.clone(),
             download_dir: self.cfg.download_dir.clone(),
             library: self.library.clone(),

@@ -39,6 +39,8 @@ impl Muralist {
     pub(super) fn open_gallery_pop(&mut self, id: u64, origin: Bounds<Pixels>, cx: &mut Context<Self>) {
         let Some(g) = self.galleries.get(id) else { return };
         self.context = None;
+        // A "Delete?" left armed elsewhere shouldn't greet the new card.
+        self.confirm_delete = None;
         self.gallery_pop_seq += 1;
         self.gallery_pop =
             Some(GalleryPop { id, origin, opened_with: g.source.clone(), seq: self.gallery_pop_seq, closing: false });
@@ -51,9 +53,17 @@ impl Muralist {
         pop.closing = true;
         let (id, seq, opened_with) = (pop.id, pop.seq, pop.opened_with.clone());
         let changed = self.galleries.get(id).is_some_and(|g| g.source != opened_with);
-        if changed && let Err(e) = self.galleries.save() {
-            self.set_status(format!("Saving galleries failed: {e:#}"), true, cx);
+        if changed {
+            // Marked stale too: if a refresh or sync is already running,
+            // the new filters still apply on the next one.
+            if let Some(g) = self.galleries.get_mut(id) {
+                g.refreshed = 0;
+            }
+            if let Err(e) = self.galleries.save() {
+                self.set_status(format!("Saving galleries failed: {e:#}"), true, cx);
+            }
         }
+        self.confirm_delete = None;
         cx.notify();
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(Duration::from_millis(CLOSE_MS)).await;
@@ -246,6 +256,12 @@ impl Muralist {
                 d.child(action("pop-refresh", "refresh-cw", "Refresh now", false).on_click(cx.listener(
                     move |this, _, _, cx| {
                         this.refresh_gallery(id, cx);
+                        // Refreshed already with these filters: closing needn't again.
+                        if let Some(pop) = this.gallery_pop.as_mut()
+                            && let Some(g) = this.galleries.get(id)
+                        {
+                            pop.opened_with = g.source.clone();
+                        }
                         this.close_gallery_pop(cx);
                     },
                 )))

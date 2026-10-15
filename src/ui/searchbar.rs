@@ -184,7 +184,7 @@ impl Muralist {
                 ),
             },
             smartq::Scope::Like(id) => {
-                let url = format!("https://th.wallhaven.cc/small/{}/{}.jpg", &id[..2.min(id.len())], id);
+                let url = smartq::small_thumb_url(id);
                 let thumb = self.thumb(format!("wh-{id}"), |key| Job::Remote { key, url });
                 let lead = div()
                     .w(px(22.))
@@ -209,17 +209,27 @@ impl Muralist {
         if let Some(known) = self.tag_names.get(&id) {
             return known.clone();
         }
+        // A failed lookup is tried again, but not every frame.
+        if self.tag_failed.get(&id).is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(30)) {
+            return None;
+        }
         self.tag_names.insert(id, None);
         let client = self.client.clone();
         cx.spawn(async move |this, cx| {
             let result = cx.background_executor().spawn(async move { client.tag(id) }).await;
-            if let Ok(tag) = result {
-                this.update(cx, |this, cx| {
-                    this.tag_names.insert(id, Some(tag));
-                    cx.notify();
-                })
-                .ok();
-            }
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(tag) => {
+                        this.tag_names.insert(id, Some(tag));
+                    }
+                    Err(_) => {
+                        this.tag_names.remove(&id);
+                        this.tag_failed.insert(id, std::time::Instant::now());
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
         })
         .detach();
         None
@@ -257,8 +267,8 @@ impl Muralist {
                     None => label = format!("tag {id}"),
                 }
                 lead = icon("book-open").size_3().text_color(tint).into_any_element();
-            } else if let Some(id) = token.strip_prefix("like:").filter(|v| v.len() >= 2) {
-                let url = format!("https://th.wallhaven.cc/small/{}/{}.jpg", &id[..2], id);
+            } else if let Some(id) = token.strip_prefix("like:").filter(|v| smartq::is_wallpaper_id(v)) {
+                let url = smartq::small_thumb_url(id);
                 let thumb = self.thumb(format!("wh-{id}"), |key| Job::Remote { key, url });
                 label = format!("like {id}");
                 lead = div()
