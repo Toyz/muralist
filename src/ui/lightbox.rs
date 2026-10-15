@@ -1205,16 +1205,14 @@ impl Muralist {
             );
 
         let rule = || div().w(px(40.)).h(px(1.)).bg(hsla(0., 0., 1., 0.1));
-        v_flex()
+        // The glass hugs what's on it, centred beside the picture: no empty
+        // rail above or below.
+        let capsule = v_flex()
             .id("lb-rail")
             .occlude()
-            .absolute()
-            .top(px(TOP))
-            .bottom(px(FILM_H + 8.))
-            .right(px(RAIL_RIGHT))
-            .w(px(RAIL_W))
+            .w_full()
+            .py_4()
             .items_center()
-            .justify_center()
             .gap_4()
             .rounded_2xl()
             .bg(hsla(0., 0., 0.04, 0.55))
@@ -1232,7 +1230,15 @@ impl Muralist {
             })
             .child(v_flex().items_center().gap_2().child(shutter).child(caption))
             .child(rule())
-            .child(tools)
+            .child(tools);
+        v_flex()
+            .absolute()
+            .top(px(TOP))
+            .bottom(px(FILM_H + 8.))
+            .right(px(RAIL_RIGHT))
+            .w(px(RAIL_W))
+            .justify_center()
+            .child(capsule)
             .into_any_element()
     }
 
