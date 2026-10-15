@@ -8,6 +8,7 @@ mod history;
 mod kit;
 mod lightbox;
 mod peek;
+mod pipeline;
 mod ring;
 mod rotate;
 mod searchbar;
@@ -15,7 +16,6 @@ mod settings;
 mod slot;
 mod smartq;
 mod span_editor;
-mod stage;
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -50,7 +50,6 @@ const INSPECTOR_RANGE: (f32, f32) = (340., 640.);
 /// The grid never gets narrower than this when panels are dragged.
 const MIN_GRID_W: f32 = 460.;
 const TITLE_H: f32 = 56.;
-const CARD_PAD: f32 = 16.;
 /// Sidebar cards are narrower, so a little tighter.
 const SIDE_CARD_PAD: f32 = 12.;
 const INSPECTOR_PAD: f32 = 20.;
@@ -3875,69 +3874,8 @@ impl Muralist {
             None => "none".into(),
         };
 
-        // One thing at a time below the preview: Set, Info, or Similar.
-        let selected = self.selected.clone();
-        let tab = if selected.is_none() { InspectorTab::Set } else { self.inspector_tab };
-        let similar_count = match &selected {
-            Some(Item::Remote(w)) => match self.similar.get(&w.id) {
-                Some(details::Similar::Ready(list)) => Some(list.len()),
-                _ => None,
-            },
-            _ => None,
-        };
-        let tab_seg = |id: &'static str, label: String, t: InspectorTab| {
-            segment(id, label, tab == t, p).on_click(cx.listener(move |this, _, _, cx| {
-                this.inspector_tab = t;
-                cx.notify();
-            }))
-        };
-        let tabs = selected.as_ref().map(|item| {
-            let remote = matches!(item, Item::Remote(_));
-            segmented_track(p)
-                .child(tab_seg("it-set", "Use".into(), InspectorTab::Set))
-                .child(tab_seg("it-info", "Info".into(), InspectorTab::Info))
-                .when(remote, |d| {
-                    d.child(tab_seg(
-                        "it-similar",
-                        match similar_count {
-                            Some(n) if n > 0 => format!("Similar  {n}"),
-                            _ => "Similar".into(),
-                        },
-                        InspectorTab::Similar,
-                    ))
-                })
-        });
-        let content: AnyElement = match (tab, &selected) {
-            (InspectorTab::Info, Some(Item::Remote(w))) => {
-                let w = w.clone();
-                self.render_info_tab(&w, cx)
-            }
-            (InspectorTab::Info, Some(Item::Local(path))) => {
-                let path = path.clone();
-                let palette = self.render_xray_palette(cx);
-                v_flex()
-                    .gap_5()
-                    .children(palette)
-                    .child(
-                        section("File", p).child(div().text_xs().text_color(p.muted).child(path.display().to_string())),
-                    )
-                    .into_any_element()
-            }
-            (InspectorTab::Similar, Some(Item::Remote(w))) => {
-                let w = w.clone();
-                self.render_similar(&w, cx).unwrap_or_else(|| {
-                    div().text_sm().text_color(p.dim).child("No similar wallpapers found").into_any_element()
-                })
-            }
-            _ => self.render_put_on(cx),
-        };
-        let tab_key = match tab {
-            InspectorTab::Set => "set",
-            InspectorTab::Info => "info",
-            InspectorTab::Similar => "similar",
-        };
         let details = glass::stagger(SharedString::from(format!("enter-{enter_key}-0")), 0, details);
-        let content = glass::stagger(SharedString::from(format!("enter-{enter_key}-{tab_key}")), 1, content);
+        let body = self.render_pipeline(details.into_any_element(), cx);
 
         let backdrop = self.backdrop();
         v_flex()
@@ -3964,7 +3902,7 @@ impl Muralist {
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
-                    .child(v_flex().gap_4().p(px(INSPECTOR_PAD)).child(details).children(tabs).child(content)),
+                    .child(div().p(px(INSPECTOR_PAD)).child(body)),
             )
     }
 
@@ -4104,7 +4042,6 @@ impl Render for Muralist {
         let topbar = self.render_topbar(cx);
         let query_chips = if self.tab == Tab::Discover { self.render_query_chips(cx) } else { None };
         let recent = if self.tab == Tab::Discover { self.render_recent(cx) } else { None };
-        let stage = self.render_stage(viewport_w - frame - self.side_w - self.insp_w, cx);
         let grid = if self.tab == Tab::History {
             self.render_history(cx)
         } else {
@@ -4182,7 +4119,6 @@ impl Render for Muralist {
                     .child(topbar)
                     .children(query_chips)
                     .child(grid)
-                    .child(stage)
                     .children(recent),
             )
             .child(inspector)

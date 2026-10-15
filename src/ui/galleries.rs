@@ -448,7 +448,7 @@ impl Muralist {
 
     fn render_gallery_row(&mut self, ix: usize, cx: &mut Context<Self>) -> Stateful<Div> {
         let p = pal();
-        let covers = self.gallery_covers(ix, 3);
+        let covers = self.gallery_covers(ix, 1);
         let g: &Gallery = &self.galleries.list[ix];
         let (id, name, n, offline) = (g.id, g.name.clone(), g.items.len(), g.offline);
         let kind = kind_icon(&g.source);
@@ -468,10 +468,9 @@ impl Muralist {
             .border_1()
             .border_color(p.border)
             .when(covers.is_empty(), |d| d.justify_center().child(icon(kind).size_3p5().text_color(p.dim)))
+            // One picture, rounded on the image itself (the frame's clip is square).
             .children(
-                covers
-                    .into_iter()
-                    .map(|t| div().flex_1().h_full().child(img(t).size_full().object_fit(ObjectFit::Cover))),
+                covers.into_iter().next().map(|t| super::radius(img(t).size_full().object_fit(ObjectFit::Cover), 5.)),
             );
 
         let status: AnyElement = match work {
