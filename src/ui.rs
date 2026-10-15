@@ -1007,6 +1007,8 @@ pub struct Muralist {
     gear_hover: bool,
     /// Which Info/Similar dossier the pointer is on.
     dossier_hover: Option<u8>,
+    /// Wallhaven has challenged a `like:` search this session.
+    like_blocked: bool,
     history_hover: Option<usize>,
     /// The day the History timeline is narrowed to, if any.
     history_day: Option<chrono::NaiveDate>,
@@ -1264,6 +1266,7 @@ impl Muralist {
             last_rotation: Instant::now(),
             gear_hover: false,
             dossier_hover: None,
+            like_blocked: false,
             history_hover: None,
             history_day: None,
             history_month: None,

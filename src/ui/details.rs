@@ -22,6 +22,50 @@ fn rgb_hsla(c: [f32; 3]) -> Hsla {
     Rgba { r: c[0], g: c[1], b: c[2], a: 1. }.into()
 }
 
+/// Lookalikes without `like:`: the wallpaper's most telling tag together
+/// with its main color, topped up from the tag alone, then the color alone.
+fn lookalikes_by_hand(
+    client: &crate::wallhaven::Client,
+    id: &str,
+    purity: [bool; 3],
+) -> anyhow::Result<Vec<Wallpaper>> {
+    let (w, tags) = client.wallpaper(id)?;
+    let tag = tags.iter().min_by_key(|t| tag_rank(&t.category).0).map(|t| format!("id:{}", t.id));
+    let color = w.colors.first().map(|c| c.trim_start_matches('#').to_owned());
+    let search = |query: Option<&String>, color: Option<&String>| {
+        client.search(&SearchParams {
+            query: query.cloned().unwrap_or_default(),
+            categories: [true, true, true],
+            purity,
+            sorting: Sorting::Favorites,
+            top_range: "1M".into(),
+            ratios: None,
+            atleast: None,
+            resolutions: None,
+            color: color.cloned(),
+            page: 1,
+            seed: None,
+        })
+    };
+    let mut found: Vec<Wallpaper> = Vec::new();
+    let attempts = [(tag.as_ref(), color.as_ref()), (tag.as_ref(), None), (None, color.as_ref())];
+    for (q, c) in attempts {
+        if found.len() >= 7 || (q.is_none() && c.is_none()) {
+            continue;
+        }
+        if q.is_none() && tag.is_some() && !found.is_empty() {
+            // A tag match beats a bare color match.
+            break;
+        }
+        for hit in search(q, c)?.data {
+            if hit.id != w.id && !found.iter().any(|f| f.id == hit.id) {
+                found.push(hit);
+            }
+        }
+    }
+    Ok(found)
+}
+
 /// Tag categories by how much they say about a wallpaper.
 fn tag_rank(category: &str) -> (u8, &'static str) {
     match category {
@@ -351,11 +395,31 @@ impl Muralist {
             if !wanted {
                 return;
             }
-            let result = cx.background_executor().spawn(async move { client.search(&params) }).await;
+            // Wallhaven's front door now challenges `like:` searches as bots,
+            // key or not. Once it has, stop asking this session and work out
+            // the lookalikes from what still answers: its most telling tag,
+            // and its main color.
+            let skip_like = this.update(cx, |this, _| this.like_blocked).unwrap_or(false);
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let like = if skip_like { None } else { Some(client.search(&params)) };
+                    match like {
+                        Some(Ok(resp)) => (Ok(resp.data), false),
+                        Some(Err(e)) if !format!("{e:#}").contains("403") => (Err(e), false),
+                        _ => (lookalikes_by_hand(&client, &params.query[5..], params.purity), true),
+                    }
+                })
+                .await;
             this.update(cx, |this, cx| {
+                let (result, blocked) = result;
+                this.like_blocked |= blocked;
                 let state = match result {
-                    Ok(resp) => Similar::Ready(resp.data.into_iter().filter(|w| w.id != id).take(6).collect()),
-                    Err(_) => Similar::Failed,
+                    Ok(list) => Similar::Ready(list.into_iter().filter(|w| w.id != id).take(6).collect()),
+                    Err(e) => {
+                        eprintln!("similar to {id}: {e:#}");
+                        Similar::Failed
+                    }
                 };
                 this.similar.insert(id, state);
                 cx.notify();

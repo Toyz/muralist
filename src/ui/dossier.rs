@@ -219,7 +219,7 @@ impl Muralist {
             lookalikes.iter().map(|w| self.remote_thumb(w, false)).collect()
         };
         let (tw, th) = THUMB;
-        let spread = if sim_hover { 22. } else { 9. };
+        let spread = if sim_hover { 24. } else { 12. };
         let stack_w = tw + spread * (thumbs.len().max(1) - 1) as f32;
         let loading = lookalikes.is_empty();
         let stack = div().relative().flex_none().w(px(stack_w)).h(px(th + 8.)).children(
