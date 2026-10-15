@@ -3261,7 +3261,7 @@ impl Muralist {
                     }),
             )
             // Purity tab hanging from the top edge, like a folder tab.
-            .when_some(purity.clone(), |d, purity| {
+            .when_some(purity, |d, purity| {
                 let c = purity_color(purity);
                 d.child(
                     h_flex()
