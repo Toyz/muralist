@@ -28,6 +28,7 @@ fn lookalikes_by_hand(
     client: &crate::wallhaven::Client,
     id: &str,
     purity: [bool; 3],
+    categories: [bool; 3],
 ) -> anyhow::Result<(Vec<Wallpaper>, Option<String>)> {
     let (w, tags) = client.wallpaper(id)?;
     let tag = tags.iter().min_by_key(|t| tag_rank(&t.category).0).map(|t| format!("id:{}", t.id));
@@ -35,7 +36,7 @@ fn lookalikes_by_hand(
     let search = |query: Option<&String>, color: Option<&String>| {
         client.search(&SearchParams {
             query: query.cloned().unwrap_or_default(),
-            categories: [true, true, true],
+            categories,
             purity,
             sorting: Sorting::Favorites,
             top_range: "1M".into(),
@@ -275,16 +276,27 @@ impl Muralist {
     // ---- Similar ------------------------------------------------------------------
 
     /// Fetch look-alikes once the selection has settled for a moment.
+    /// Lookalikes honour the content filters the grid searches with (the
+    /// sidebar's plus any the smart query adds), and are fetched again when
+    /// those change.
     pub(super) fn load_similar(&mut self, id: String, cx: &mut Context<Self>) {
-        if self.similar.contains_key(&id) {
+        let filters = self.current_search(cx).2;
+        let mut purity = filters.purity;
+        if !self.client.has_key() {
+            purity[2] = false;
+        }
+        let wanted = (purity, filters.categories);
+        if self.similar.contains_key(&id) && self.similar_for.get(&id) == Some(&wanted) {
             return;
         }
+        self.similar_for.insert(id.clone(), wanted);
         self.similar.insert(id.clone(), Similar::Loading);
         let client = self.client.clone();
+        let categories = filters.categories;
         let params = SearchParams {
             query: format!("like:{id}"),
-            categories: [true, true, true],
-            purity: self.purity,
+            categories,
+            purity,
             sorting: Sorting::Relevance,
             top_range: "1M".into(),
             ratios: None,
@@ -320,7 +332,7 @@ impl Muralist {
                     match like {
                         Some(Ok(resp)) => (Ok((resp.data, Some(params.query.clone()))), false),
                         Some(Err(e)) if !format!("{e:#}").contains("403") => (Err(e), false),
-                        _ => (lookalikes_by_hand(&client, &params.query[5..], params.purity), true),
+                        _ => (lookalikes_by_hand(&client, &params.query[5..], params.purity, params.categories), true),
                     }
                 })
                 .await;
@@ -332,8 +344,18 @@ impl Muralist {
                         if let Some(q) = query {
                             this.similar_query.insert(id.clone(), q);
                         }
+                        // And checked here too, whatever the search let through.
+                        let allowed = |w: &Wallpaper| {
+                            let pi = ["sfw", "sketchy", "nsfw"].iter().position(|k| *k == w.purity);
+                            let ci = ["general", "anime", "people"].iter().position(|k| *k == w.category);
+                            pi.is_some_and(|i| purity[i]) && ci.is_none_or(|i| categories[i])
+                        };
                         Similar::Ready(
-                            list.into_iter().filter(|w| w.id != id).take(6).map(std::sync::Arc::new).collect(),
+                            list.into_iter()
+                                .filter(|w| w.id != id && allowed(w))
+                                .take(6)
+                                .map(std::sync::Arc::new)
+                                .collect(),
                         )
                     }
                     Err(e) => {

@@ -1023,6 +1023,8 @@ pub struct Muralist {
     /// Palette band under the pointer.
     xray: Option<usize>,
     similar: HashMap<String, details::Similar>,
+    /// The (purity, categories) each wallpaper's lookalikes were found with.
+    similar_for: HashMap<String, ([bool; 3], [bool; 3])>,
     /// Tag id -> (name, category); `None` while fetching or if it failed.
     /// Tags by id, as fetched or seen; `None` while a fetch is out.
     tag_names: HashMap<u64, Option<crate::wallhaven::Tag>>,
@@ -1310,6 +1312,7 @@ impl Muralist {
             xray_palettes: HashMap::new(),
             xray: None,
             similar: HashMap::new(),
+            similar_for: HashMap::new(),
             tag_names: HashMap::new(),
             tag_failed: HashMap::new(),
             query_parsed: None,
@@ -2055,6 +2058,15 @@ impl Muralist {
         if reset {
             self.status = "Searching...".into();
             self.status_error = false;
+            // Filters may have changed: the selection's lookalikes follow.
+            let selected_id = match &self.selected {
+                Some(Item::Remote(w)) => Some(w.id.clone()),
+                Some(Item::Local(path)) => self.provenance.of(path).map(|r| r.wallpaper.id.clone()),
+                None => None,
+            };
+            if let Some(id) = selected_id {
+                self.load_similar(id, cx);
+            }
         }
 
         let client = self.client.clone();

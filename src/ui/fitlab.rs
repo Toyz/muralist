@@ -59,18 +59,65 @@ fn gauge_at(scale: f32) -> f32 {
     ((scale.clamp(GAUGE_MIN, GAUGE_MAX).ln() - lo) / (hi - lo)).clamp(0., 1.)
 }
 
-impl Muralist {
-    fn sharpness_color(&self, scale: f32) -> Hsla {
+/// A signal color lit like the picture it's drawn over: its own hue,
+/// nudged toward the picture's, with the picture's saturation and lightness
+/// mixed in. Red over a cold, dark image reads cooler and dimmer than red
+/// over a sunset, instead of the same flat red pasted on both.
+fn in_light(signal: Hsla, light: Hsla) -> Hsla {
+    let mut dh = light.h - signal.h;
+    if dh > 0.5 {
+        dh -= 1.;
+    } else if dh < -0.5 {
+        dh += 1.;
+    }
+    Hsla {
+        h: (signal.h + dh * 0.18).rem_euclid(1.),
+        s: (signal.s * 0.55 + light.s * 0.45).clamp(0.35, 0.9),
+        l: (signal.l * 0.6 + light.l * 0.4).clamp(0.45, 0.68),
+        a: 1.,
+    }
+}
+
+/// The lab's all-clear, caution and warning colors, in the picture's light.
+#[derive(Clone, Copy)]
+struct Signals {
+    ok: Hsla,
+    caution: Hsla,
+    bad: Hsla,
+}
+
+impl Signals {
+    fn new(light: Hsla) -> Self {
         let p = pal();
-        if scale <= 1. {
-            p.ok
-        } else if scale <= 1.5 {
-            purity_color("sketchy")
-        } else {
-            p.error
+        Self {
+            ok: in_light(p.ok, light),
+            caution: in_light(purity_color("sketchy"), light),
+            bad: in_light(p.error, light),
         }
     }
 
+    /// For a scale factor: sharp, soft, or blurry.
+    fn of(self, scale: f32) -> Hsla {
+        if scale <= 1. {
+            self.ok
+        } else if scale <= 1.5 {
+            self.caution
+        } else {
+            self.bad
+        }
+    }
+
+    /// For a score out of 100.
+    fn score(self, n: u32) -> Hsla {
+        match n {
+            70.. => self.ok,
+            45.. => self.caution,
+            _ => self.bad,
+        }
+    }
+}
+
+impl Muralist {
     pub(super) fn render_fit_check(&mut self, w: &Wallpaper, c: Hsla, cx: &mut Context<Self>) -> Option<AnyElement> {
         let p = pal();
         let (iw, ih) = w.dims().map(|(a, b)| (a as f32, b as f32))?;
@@ -78,6 +125,9 @@ impl Muralist {
             return None;
         }
         let thumb = self.remote_thumb(w, true).or_else(|| self.remote_thumb(w, false));
+        // Every signal color takes the light of the picture's main color.
+        let light = w.colors.first().and_then(|h| super::parse_hex(h)).unwrap_or(c);
+        let sig = Signals::new(light);
         let monitors = self.monitors.clone();
         let mode = if monitors.len() < 2 { FitMode::Fill } else { self.fit_mode };
         let key = &w.id;
@@ -105,13 +155,7 @@ impl Muralist {
         // ---- the switch, with each mode's score ----
         let tab = |id: &'static str, label: &'static str, n: u32, m: FitMode| {
             let on = mode == m;
-            let tint = if n >= 70 {
-                p.ok
-            } else if n >= 45 {
-                purity_color("sketchy")
-            } else {
-                p.error
-            };
+            let tint = sig.score(n);
             v_flex()
                 .id(id)
                 .flex_1()
@@ -191,7 +235,7 @@ impl Muralist {
                 let stripes = |w: f32, h: f32| {
                     // Red warning stripes over what a span throws away.
                     let n = ((w + h) / 7.).ceil() as usize;
-                    div().absolute().inset_0().overflow_hidden().bg(with_alpha(p.error, 0.12)).children((0..n).map(
+                    div().absolute().inset_0().overflow_hidden().bg(with_alpha(sig.bad, 0.12)).children((0..n).map(
                         move |i| {
                             div()
                                 .absolute()
@@ -199,7 +243,7 @@ impl Muralist {
                                 .bottom_0()
                                 .left(px(i as f32 * 7. - h))
                                 .w(px(2.))
-                                .bg(with_alpha(p.error, 0.35))
+                                .bg(with_alpha(sig.bad, 0.35))
                         },
                     ))
                 };
@@ -216,7 +260,7 @@ impl Muralist {
                                     .justify_center()
                                     .text_size(px(9.))
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(p.error)
+                                    .text_color(sig.bad)
                                     .child(label),
                             )
                         },
@@ -229,7 +273,9 @@ impl Muralist {
                     .rounded_md()
                     .overflow_hidden()
                     .bg(p.bg)
-                    .when_some(thumb.clone(), |d, t| d.child(boxed(img(t), mw, mh).grayscale(true).opacity(0.35)))
+                    .when_some(thumb.clone(), |d, t| {
+                        d.child(super::radius(boxed(img(t), mw, mh).grayscale(true).opacity(0.35), 6.))
+                    })
                     // The strip a span keeps, lit.
                     .child(
                         div()
@@ -274,10 +320,10 @@ impl Muralist {
                                 .rounded_sm()
                                 .bg(hsla(0., 0., 0., 0.8))
                                 .border_1()
-                                .border_color(with_alpha(p.error, 0.6))
+                                .border_color(with_alpha(sig.bad, 0.6))
                                 .text_size(px(9.))
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(p.error)
+                                .text_color(sig.bad)
                                 .child(format!("-{:.0}% OF THE PICTURE", cropped * 100.)),
                         )
                     });
@@ -295,7 +341,7 @@ impl Muralist {
                         let (sx, sy) = (mx * ds, my * ds);
                         let (sw, sh) = (m.width as f32 * ds - 4., m.height as f32 * ds - 4.);
                         let (iw2, ih2) = (sw - bezel * 2., sh - bezel * 2.);
-                        let tint = self.sharpness_color(span[i]);
+                        let tint = sig.of(span[i]);
                         // The picture as a span lays it over the whole desk,
                         // seen through this screen.
                         let (pl, pt) = ((ox - mx) * ds - bezel, (oy - my) * ds - bezel);
@@ -363,7 +409,7 @@ impl Muralist {
                     .map(|(i, m)| {
                         let sx = (m.x - min_x) as f32 * ds;
                         let sw = m.width as f32 * ds;
-                        let tint = self.sharpness_color(span[i]);
+                        let tint = sig.of(span[i]);
                         v_flex()
                             .absolute()
                             .left(px(sx))
@@ -412,7 +458,7 @@ impl Muralist {
                     .map(|(i, m)| {
                         let th = tile_h * fit;
                         let tw = th * m.width as f32 / m.height.max(1) as f32;
-                        let tint = self.sharpness_color(fill[i]);
+                        let tint = sig.of(fill[i]);
                         v_flex()
                             .gap_1()
                             .child(
@@ -424,7 +470,12 @@ impl Muralist {
                                     .overflow_hidden()
                                     .bg(p.bg)
                                     .when_some(thumb.clone(), |d, t| {
-                                        d.child(boxed(img(t), tw, th).object_fit(ObjectFit::Cover))
+                                        // Inset inside the border and rounded itself: the
+                                        // tile's clip is only a rectangle.
+                                        d.child(div().absolute().top(px(1.)).left(px(1.)).child(super::radius(
+                                            boxed(img(t), tw - 2., th - 2.).object_fit(ObjectFit::Cover),
+                                            5.,
+                                        )))
                                     })
                                     .child(div().absolute().inset_0().rounded_md().border_1().border_color(tint)),
                             )
@@ -457,7 +508,7 @@ impl Muralist {
             .enumerate()
             .map(|(i, m)| {
                 let s = scales[i];
-                let tint = self.sharpness_color(s);
+                let tint = sig.of(s);
                 let at = gauge_at(s);
                 let one = gauge_at(1.);
                 let track = div()
@@ -467,8 +518,8 @@ impl Muralist {
                     .rounded_full()
                     .bg(linear_gradient(
                         90.,
-                        linear_color_stop(with_alpha(p.ok, 0.55), one),
-                        linear_color_stop(with_alpha(p.error, 0.55), 1.),
+                        linear_color_stop(with_alpha(sig.ok, 0.55), one),
+                        linear_color_stop(with_alpha(sig.bad, 0.55), 1.),
                     ))
                     // 1x marked: left of it every screen pixel has a source pixel.
                     .child(div().absolute().top(px(-2.)).bottom(px(-2.)).left(relative(one)).w(px(1.)).bg(p.fg))
