@@ -1039,6 +1039,8 @@ pub struct Muralist {
     gear_angle: f32,
     /// Dragging the grid's minimap thumb, grabbed this far below its top.
     grid_drag: Option<minimap::MinimapDrag>,
+    /// The pointer is on the scrollbar, which opens into a minimap.
+    minimap_open: bool,
     /// How the fit lab looks at the selection: spanned or per screen.
     fit_mode: fitlab::FitMode,
     gear_tick: Instant,
@@ -1322,6 +1324,7 @@ impl Muralist {
             gear_hover: false,
             gear_angle: 0.,
             grid_drag: None,
+            minimap_open: false,
             fit_mode: fitlab::FitMode::default(),
             gear_tick: Instant::now(),
             dossier_hover: None,
