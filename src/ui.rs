@@ -13,6 +13,7 @@ mod ring;
 mod rotate;
 mod searchbar;
 mod settings;
+mod sheet;
 mod slot;
 mod smartq;
 mod span_editor;
@@ -2214,13 +2215,15 @@ impl Muralist {
             let label_c = adaptive::readable(Hsla { l: c.l.max(0.62), ..c }, hsla(0., 0., 0.06, 1.), 4.5);
             let group = SharedString::from(format!("{id}-g"));
             let n = thumbs.len();
-            let layer = |path: PathBuf, gray: bool| {
-                // Rounded on the image itself: the tile's clip is square.
-                div()
-                    .absolute()
-                    .inset_0()
-                    .child(radius(img(path).size_full().object_fit(ObjectFit::Cover).grayscale(gray), NAV_TILE_R))
-            };
+            let layer =
+                |path: PathBuf, gray: bool| {
+                    // Rounded on the image itself (the tile's clip is square), and
+                    // inset under the edge so its soft corner stays hidden.
+                    div().absolute().top(px(1.)).left(px(1.)).right(px(1.)).bottom(px(1.)).child(radius(
+                        img(path).size_full().object_fit(ObjectFit::Cover).grayscale(gray),
+                        NAV_TILE_R - 1.,
+                    ))
+                };
             // The active tile dissolves from one image to the next, so they
             // blend over time instead of sitting side by side.
             let montage = |gray: bool| -> Vec<AnyElement> {
@@ -2263,9 +2266,10 @@ impl Muralist {
                     d.child(
                         div()
                             .absolute()
-                            .right(px(-6.))
-                            .top(px(-6.))
-                            .child(icon(icon_name).size(px(44.)).text_color(with_alpha(c, 0.18))),
+                            // Fully inside: the square clip would let it past the corner.
+                            .right(px(8.))
+                            .top(px(6.))
+                            .child(icon(icon_name).size(px(30.)).text_color(with_alpha(c, 0.16))),
                     )
                 })
                 // Resting: grayscale. Hover or active: color.
@@ -2290,7 +2294,7 @@ impl Muralist {
                 )))
                 .when(on, |d| {
                     // One pass of light across the chosen tile.
-                    d.child(div().absolute().top_0().bottom_0().w(px(40.)).with_animation(
+                    d.child(div().absolute().top(px(NAV_TILE_R)).bottom(px(NAV_TILE_R)).w(px(40.)).with_animation(
                         SharedString::from(format!("sweep-{id}")),
                         Animation::new(std::time::Duration::from_millis(700)).with_easing(ease_in_out),
                         move |d, t| {
@@ -4057,6 +4061,7 @@ impl Render for Muralist {
         let lightbox = self.lightbox.then(|| self.render_lightbox(window, cx));
         let settings = self.settings_open.then(|| self.render_settings(cx));
         let picker = self.render_picker(cx);
+        let sheet = self.render_sheet(cx);
         let ring = self.render_ring(cx);
         let span_editor = self.render_span_editor(cx);
 
@@ -4087,7 +4092,7 @@ impl Render for Muralist {
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
                     // Clicking empty UI takes focus back from fields, so Space peeks.
-                    if !this.typing(window, cx) && !this.lightbox && !this.settings_open {
+                    if !this.typing(window, cx) && !this.lightbox && !this.settings_open && !this.sheet_open() {
                         this.main_focus.focus(window, cx);
                     }
                 }),
@@ -4124,6 +4129,7 @@ impl Render for Muralist {
             .child(inspector)
             .children(lightbox)
             .when(!self.lightbox, |d| d.child(self.resize_handle(true, cx)).child(self.resize_handle(false, cx)))
+            .children(sheet)
             .children(picker)
             .children(ring)
             .children(toast)

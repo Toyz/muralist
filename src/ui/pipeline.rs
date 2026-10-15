@@ -15,7 +15,7 @@ use gpui_kit::*;
 
 use super::{
     InspectorTab, Item, LockMode, Muralist, Pal, Placement, Reach, Target, TargetMode, details, drag, hex, icon, kit,
-    on_accent, pal, radius, section, segment, segmented_track, with_alpha,
+    on_accent, pal, radius, segment, segmented_track, with_alpha,
 };
 
 /// Corner radius of a screen tile, shared by its picture and its edge.
@@ -183,7 +183,17 @@ impl Muralist {
                     })
                     // The picture, rounded to the tile's own radius.
                     .map(|d| match thumb {
-                        Some(t) => d.child(radius(img(t).size_full().object_fit(ObjectFit::Cover), TILE_R)),
+                        // Inset under the edge, so the picture's soft corner
+                        // can't show past the edge's own.
+                        Some(t) => d.child(
+                            div()
+                                .absolute()
+                                .top(px(1.))
+                                .left(px(1.))
+                                .right(px(1.))
+                                .bottom(px(1.))
+                                .child(radius(img(t).size_full().object_fit(ObjectFit::Cover), TILE_R - 1.)),
+                        ),
                         None => d.child(
                             div()
                                 .size_full()
@@ -278,39 +288,6 @@ impl Muralist {
         div().relative().flex_none().w(px(span_w * scale)).h(px(span_h * scale)).children(screens).into_any_element()
     }
 
-    /// Info or Similar for the selection, when one is open.
-    fn render_more(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let p = pal();
-        let item = self.selected.clone()?;
-        match (self.inspector_tab, &item) {
-            (InspectorTab::Info, Item::Remote(w)) => {
-                let w = w.clone();
-                Some(self.render_info_tab(&w, cx))
-            }
-            (InspectorTab::Info, Item::Local(path)) => {
-                let path = path.clone();
-                let palette = self.render_xray_palette(cx);
-                Some(
-                    v_flex()
-                        .gap_5()
-                        .children(palette)
-                        .child(
-                            section("File", p)
-                                .child(div().text_xs().text_color(p.muted).child(path.display().to_string())),
-                        )
-                        .into_any_element(),
-                )
-            }
-            (InspectorTab::Similar, Item::Remote(w)) => {
-                let w = w.clone();
-                Some(self.render_similar(&w, cx).unwrap_or_else(|| {
-                    div().text_sm().text_color(p.dim).child("No similar wallpapers found").into_any_element()
-                }))
-            }
-            _ => None,
-        }
-    }
-
     /// The inspector's body: the four steps.
     pub(super) fn render_pipeline(&mut self, details: AnyElement, cx: &mut Context<Self>) -> AnyElement {
         let p = pal();
@@ -323,7 +300,6 @@ impl Muralist {
         let staged = changes > 0 || fetching > 0 || busy;
 
         // ---- 1. Wallpaper ----------------------------------------------------
-        let open = self.inspector_tab;
         let similar_count = match &selected {
             Some(Item::Remote(w)) => match self.similar.get(&w.id) {
                 Some(details::Similar::Ready(list)) => Some(list.len()),
@@ -331,15 +307,14 @@ impl Muralist {
             },
             _ => None,
         };
-        // Info and Similar fold open under the wallpaper; click again to close.
+        // Info and Similar open in a modal.
         let more_toggle = |id: &'static str, label: String, icon_name: &'static str, t: InspectorTab| {
-            let on = open == t;
-            kit::Btn::new(id).label(label).icon(icon_name).sm().ghost().selected(on).on_click(cx.listener(
-                move |this, _, _, cx| {
-                    this.inspector_tab = if this.inspector_tab == t { InspectorTab::Set } else { t };
-                    cx.notify();
-                },
-            ))
+            kit::Btn::new(id)
+                .label(label)
+                .icon(icon_name)
+                .sm()
+                .ghost()
+                .on_click(cx.listener(move |this, _, window, cx| this.open_sheet(t, window, cx)))
         };
         let toggles = selected.as_ref().map(|item| {
             let remote = matches!(item, Item::Remote(_));
@@ -358,8 +333,35 @@ impl Muralist {
                 },
             )
         });
-        let more = self.render_more(cx);
-        let wallpaper = v_flex().gap_3().child(details).children(toggles).children(more).into_any_element();
+        // Or let muralist choose what goes up: Spin picks at random from your
+        // results, Match picks ones whose colors suit the selection.
+        let can_spin = !self.results.is_empty() && self.slot.is_none();
+        let choose = |id: &'static str, icon_name: &'static str, label: &'static str, tip: &'static str, on: bool| {
+            kit::Btn::new(id).label(label).icon(icon_name).sm().disabled(!on).tooltip(tip).render().flex_1()
+        };
+        let match_tip = if has_selection {
+            "Fill the other screens with wallpapers whose colors match this one"
+        } else {
+            "Fill every screen with wallpapers whose colors match each other"
+        };
+        let pickers = h_flex()
+            .gap_2()
+            .child(
+                choose("spin", "dices", "Spin", "A random wallpaper for every screen, from your results", can_spin)
+                    .on_click(cx.listener(|this, _, _, cx| this.spin(cx))),
+            )
+            .child(
+                choose("harmonize", "palette", "Match", match_tip, can_spin)
+                    .on_click(cx.listener(|this, _, _, cx| this.harmonize(cx))),
+            );
+        let choose_hint =
+            if has_selection { "Or let muralist choose" } else { "Pick one from the grid, or let muralist choose" };
+        let wallpaper = v_flex()
+            .gap_3()
+            .child(details)
+            .children(toggles)
+            .child(v_flex().gap_1p5().child(div().text_xs().text_color(p.dim).child(choose_hint)).child(pickers))
+            .into_any_element();
 
         let s1 = if has_selection { StepState::Done } else { StepState::Current };
         if !supported {
@@ -491,7 +493,6 @@ impl Muralist {
             h_flex().justify_center().gap_3().children(layouts)
         };
 
-        let can_spin = !self.results.is_empty() && self.slot.is_none();
         let tile = |id: &'static str, name: &'static str, label: &'static str, tip: &'static str, enabled: bool| {
             kit::surface(v_flex(), p)
                 .id(id)
@@ -533,12 +534,6 @@ impl Muralist {
             .into_any_element(),
             tile("span", "frame", "Span", "Stretch the selected wallpaper across every screen", has_selection)
                 .when(has_selection, |d| d.on_click(cx.listener(|this, _, _, cx| this.open_span_editor(cx))))
-                .into_any_element(),
-            tile("spin", "dices", "Spin", "Random wallpapers from your results, slot-machine style", can_spin)
-                .when(can_spin, |d| d.on_click(cx.listener(|this, _, _, cx| this.spin(cx))))
-                .into_any_element(),
-            tile("harmonize", "palette", "Match", "Wallpapers whose colors match the selected one", can_spin)
-                .when(can_spin, |d| d.on_click(cx.listener(|this, _, _, cx| this.harmonize(cx))))
                 .into_any_element(),
         ];
         if mode == TargetMode::Lock {
@@ -583,7 +578,7 @@ impl Muralist {
             .child(div().text_xs().text_color(p.dim).child(if has_selection {
                 "Click a screen to put the wallpaper there, or drag a card onto one."
             } else {
-                "Pick a wallpaper, or let Spin and Match choose for you."
+                "Pick a wallpaper first, then click a screen or use Fill all."
             }))
             .child(div().grid().grid_cols(cols).gap_2().children(tiles))
             .into_any_element();
