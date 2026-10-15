@@ -146,7 +146,7 @@ pub struct WallpaperInfo {
     pub created_at: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Tag {
     pub id: u64,
     pub name: String,
@@ -170,7 +170,15 @@ struct TagResponse {
 
 #[derive(Deserialize)]
 struct WallpaperResponse {
-    data: Wallpaper,
+    data: WallpaperWithTags,
+}
+
+#[derive(Deserialize)]
+struct WallpaperWithTags {
+    #[serde(flatten)]
+    wallpaper: Wallpaper,
+    #[serde(default)]
+    tags: Vec<Tag>,
 }
 
 #[derive(Deserialize)]
@@ -371,15 +379,17 @@ impl Client {
         Ok(resp.json::<InfoResponse>()?.data)
     }
 
-    /// A single wallpaper's record by ID (purity, category, colors...).
-    pub fn wallpaper(&self, id: &str) -> Result<Wallpaper> {
+    /// A single wallpaper's record by ID (purity, category, colors...) and
+    /// its tags.
+    pub fn wallpaper(&self, id: &str) -> Result<(Wallpaper, Vec<Tag>)> {
         let resp = self.get(&format!("{BASE}/w/{id}")).send()?;
         match resp.status().as_u16() {
             200 => {}
             429 => bail!("rate limited, try again in a moment"),
             s => bail!("HTTP {s}"),
         }
-        Ok(resp.json::<WallpaperResponse>()?.data)
+        let data = resp.json::<WallpaperResponse>()?.data;
+        Ok((data.wallpaper, data.tags))
     }
 
     /// The account's collections. Needs an API key.

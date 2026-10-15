@@ -7,6 +7,7 @@ mod glass;
 mod gridmodes;
 mod history;
 mod kit;
+mod library;
 mod lightbox;
 mod peek;
 mod pipeline;
@@ -965,6 +966,8 @@ pub struct Muralist {
     provenance_pending: HashSet<String>,
     /// The background lookup of saved files: how many done, of how many.
     identifying: Option<(usize, usize)>,
+    lib_filter: library::LibFilter,
+    lib_tag_query: Entity<InputState>,
     /// The gallery the Galleries tab shows.
     gallery: Option<u64>,
     gallery_work: HashMap<u64, galleries::GalleryWork>,
@@ -1142,6 +1145,13 @@ impl Muralist {
             _ => {}
         });
 
+        let lib_tag_query = cx.new(|cx| InputState::new(window, cx).placeholder("Find a tag"));
+        let lib_tag_sub = cx.subscribe(&lib_tag_query, |_, _, ev: &InputEvent, cx| {
+            if matches!(ev, InputEvent::Change) {
+                cx.notify();
+            }
+        });
+
         let (pool, mut done) = ThumbPool::start(client.clone());
         let thumb_task = cx.spawn(async move |this, cx| {
             while let Some(first) = done.next().await {
@@ -1206,6 +1216,8 @@ impl Muralist {
             provenance: crate::provenance::Provenance::load(),
             provenance_pending: HashSet::new(),
             identifying: None,
+            lib_filter: library::LibFilter::default(),
+            lib_tag_query,
             gallery: None,
             gallery_work: HashMap::new(),
             import: None,
@@ -1284,7 +1296,7 @@ impl Muralist {
             status,
             status_error,
             toast_at: None,
-            _subscriptions: vec![sub, rename_sub, user_sub],
+            _subscriptions: vec![sub, rename_sub, user_sub, lib_tag_sub],
             _thumb_task: thumb_task,
             cfg,
         };
@@ -1537,7 +1549,12 @@ impl Muralist {
     }
 
     fn is_selected_id(&self, id: &str) -> bool {
-        matches!(&self.selected, Some(Item::Remote(w)) if w.id == id)
+        match &self.selected {
+            Some(Item::Remote(w)) => w.id == id,
+            // A saved file is the wallpaper whose ID is in its name.
+            Some(Item::Local(path)) => crate::provenance::wallhaven_id(path).as_deref() == Some(id),
+            None => false,
+        }
     }
 
     /// Fetch tags/uploader for a wallpaper. Waits briefly first so arrow-key
@@ -1572,6 +1589,11 @@ impl Muralist {
                         // Every tag we see makes `id:` chips resolve instantly later.
                         for tag in &info.tags {
                             this.tag_names.insert(tag.id, Some((tag.name.clone(), tag.category.clone())));
+                        }
+                        // A saved wallpaper keeps its tags for the Library.
+                        if this.provenance.records.get(&id).is_some_and(|r| r.tags.is_none()) {
+                            let _ = crate::provenance::set_tags(&id, &info.tags);
+                            this.provenance = crate::provenance::Provenance::load();
                         }
                         InfoState::Ready(info)
                     }
@@ -1618,7 +1640,7 @@ impl Muralist {
     fn current_items(&self) -> Vec<Item> {
         let mut items: Vec<Item> = match self.tab {
             Tab::Discover => self.results.iter().cloned().map(Item::Remote).collect(),
-            Tab::Library => self.library.iter().cloned().map(Item::Local).collect(),
+            Tab::Library => self.library_items(),
             Tab::Galleries => self.gallery_items(),
             Tab::History => Vec::new(),
         };
@@ -2613,14 +2635,7 @@ impl Muralist {
         } else if tab == Tab::Galleries {
             cards = cards.child(self.render_gallery_side(cx));
         } else if tab == Tab::Library {
-            cards = cards.child(
-                side_card("folder", "Library", Some(compact_count(self.library.len() as u64).into()), p).child(
-                    div()
-                        .text_xs()
-                        .text_color(p.muted)
-                        .child("Wallpapers you have downloaded or set. Select one to put it on a display."),
-                ),
-            );
+            cards = cards.child(self.render_library_side(cx));
         } else {
             cards = cards.child(
                 side_card("calendar", "History", Some(compact_count(self.applied.history.len() as u64).into()), p)
@@ -2802,11 +2817,17 @@ impl Muralist {
                                     ),
                                 ),
                         ),
-                        None => d.child(div().flex_none().text_xs().text_color(p.dim).child(format!(
-                            "{} wallpaper{}",
-                            thousands(n as u64),
-                            if n == 1 { "" } else { "s" }
-                        ))),
+                        None => {
+                            d.child(div().flex_none().text_xs().text_color(p.dim).child(if self.lib_filter.active() {
+                                format!(
+                                    "{} of {} wallpapers",
+                                    thousands(self.library_items().len() as u64),
+                                    thousands(n as u64)
+                                )
+                            } else {
+                                format!("{} wallpaper{}", thousands(n as u64), if n == 1 { "" } else { "s" })
+                            }))
+                        }
                     });
                 let actions = segmented_track(p)
                     .flex_none()
@@ -3351,6 +3372,16 @@ impl Muralist {
 
         match self.tab {
             Tab::Galleries => self.render_gallery_empty(cx),
+            Tab::Library if self.lib_filter.active() && !self.library.is_empty() => {
+                shell(hero("funnel-x", p.accent), "Nothing matches", "No saved wallpaper has all of these.".into())
+                    .child(
+                        kit::Btn::new("lib-empty-clear")
+                            .label("Clear filters")
+                            .icon("rotate-ccw")
+                            .on_click(cx.listener(|this, _, _, cx| this.clear_lib_filter(cx))),
+                    )
+                    .into_any_element()
+            }
             Tab::Library | Tab::History => shell(
                 hero("folder-open", p.accent),
                 "Your library is empty",
@@ -3910,7 +3941,9 @@ impl Muralist {
             let query = id.clone();
             let result = cx
                 .background_executor()
-                .spawn(async move { client.wallpaper(&query).and_then(|w| crate::provenance::remember(&w)) })
+                .spawn(async move {
+                    client.wallpaper(&query).and_then(|(w, tags)| crate::provenance::remember_with_tags(&w, tags))
+                })
                 .await;
             this.update(cx, |this, cx| {
                 this.provenance_pending.remove(&id);
@@ -3939,7 +3972,7 @@ impl Muralist {
         let mut ids: Vec<String> = self
             .library
             .iter()
-            .filter(|p| self.provenance.of(p).is_none())
+            .filter(|p| self.provenance.of(p).is_none_or(|r| r.tags.is_none()))
             .filter_map(|p| crate::provenance::wallhaven_id(p))
             .collect();
         ids.sort();
@@ -3956,14 +3989,17 @@ impl Muralist {
             for (i, id) in ids.into_iter().enumerate() {
                 let skip = this
                     .update(cx, |this, _| {
-                        this.provenance.records.contains_key(&id) || this.provenance_pending.contains(&id)
+                        this.provenance.records.get(&id).is_some_and(|r| r.tags.is_some())
+                            || this.provenance_pending.contains(&id)
                     })
                     .unwrap_or(true);
                 if !skip {
                     let client = client.clone();
                     let got = cx
                         .background_executor()
-                        .spawn(async move { client.wallpaper(&id).and_then(|w| crate::provenance::remember(&w)) })
+                        .spawn(async move {
+                            client.wallpaper(&id).and_then(|(w, tags)| crate::provenance::remember_with_tags(&w, tags))
+                        })
                         .await;
                     this.update(cx, |this, _| {
                         // Each card takes on its purity as soon as it's known.

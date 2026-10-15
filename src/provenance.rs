@@ -14,7 +14,7 @@ use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::config::config_dir;
-use crate::wallhaven::Wallpaper;
+use crate::wallhaven::{Tag, Wallpaper};
 
 /// Background threads record too; writes go one at a time.
 static WRITE: Mutex<()> = Mutex::new(());
@@ -24,6 +24,9 @@ pub struct Record {
     pub wallpaper: Wallpaper,
     /// When it was first saved (Unix seconds).
     pub saved: i64,
+    /// Its tags, once looked up (search results don't carry them).
+    #[serde(default)]
+    pub tags: Option<Vec<Tag>>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -47,16 +50,50 @@ impl Provenance {
     }
 }
 
-/// Notes that `w` was saved. Keeps the first save time if it's already known.
+/// Notes that `w` was saved. Keeps the first save time, and any tags
+/// already known.
 pub fn remember(w: &Wallpaper) -> Result<()> {
+    record(w, None)
+}
+
+/// Notes `w` along with its tags.
+pub fn remember_with_tags(w: &Wallpaper, tags: Vec<Tag>) -> Result<()> {
+    record(w, Some(tags))
+}
+
+/// Adds tags to a wallpaper already on record, if they're new.
+pub fn set_tags(id: &str, tags: &[Tag]) -> Result<()> {
     let _guard = WRITE.lock().unwrap_or_else(|e| e.into_inner());
     let mut p = Provenance::load();
-    let saved = p.records.get(&w.id).map_or_else(|| chrono::Utc::now().timestamp(), |r| r.saved);
-    p.records.insert(w.id.clone(), Record { wallpaper: w.clone(), saved });
+    match p.records.get_mut(id) {
+        Some(r) if r.tags.as_deref() != Some(tags) => r.tags = Some(tags.to_vec()),
+        _ => return Ok(()),
+    }
+    write(&p)
+}
+
+fn record(w: &Wallpaper, tags: Option<Vec<Tag>>) -> Result<()> {
+    let _guard = WRITE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut p = Provenance::load();
+    let r = p.records.entry(w.id.clone()).or_insert_with(|| Record {
+        wallpaper: w.clone(),
+        saved: chrono::Utc::now().timestamp(),
+        tags: None,
+    });
+    r.wallpaper = w.clone();
+    if tags.is_some() {
+        r.tags = tags;
+    }
+    write(&p)
+}
+
+/// Writes to a temporary file, then renames it over the store, so a reader
+/// never sees half of it.
+fn write(p: &Provenance) -> Result<()> {
     let path = path();
     fs::create_dir_all(path.parent().unwrap())?;
     let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, serde_json::to_string_pretty(&p)?).with_context(|| format!("writing {}", tmp.display()))?;
+    fs::write(&tmp, serde_json::to_string_pretty(p)?).with_context(|| format!("writing {}", tmp.display()))?;
     fs::rename(&tmp, &path).with_context(|| format!("replacing {}", path.display()))
 }
 
