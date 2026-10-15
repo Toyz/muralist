@@ -1,4 +1,5 @@
 mod adaptive;
+mod context;
 mod details;
 mod drag;
 mod galleries;
@@ -9,7 +10,6 @@ mod kit;
 mod lightbox;
 mod peek;
 mod pipeline;
-mod ring;
 mod rotate;
 mod searchbar;
 mod settings;
@@ -964,9 +964,11 @@ pub struct Muralist {
     gallery_work: HashMap<u64, galleries::GalleryWork>,
     import: Option<galleries::ImportState>,
     picker: Option<galleries::Picker>,
-    ring: Option<ring::Ring>,
-    /// Which ring action the pointer is over.
-    ring_hover: Option<usize>,
+    context: Option<context::ContextMenu>,
+    /// Which screen in the context card the pointer is over.
+    context_hover: Option<usize>,
+    /// The context card's gallery list is open.
+    context_galleries: bool,
     /// Gallery whose name is being edited in the top bar.
     renaming: Option<u64>,
     /// Gallery whose delete button is waiting for a second click.
@@ -1197,8 +1199,9 @@ impl Muralist {
             gallery_work: HashMap::new(),
             import: None,
             picker: None,
-            ring: None,
-            ring_hover: None,
+            context: None,
+            context_hover: None,
+            context_galleries: false,
             renaming: None,
             confirm_delete: None,
             gallery_name,
@@ -3077,7 +3080,7 @@ impl Muralist {
             .on_mouse_down(MouseButton::Right, {
                 let item = item.clone();
                 cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
-                    this.open_ring(item.clone(), ev.position, cx);
+                    this.open_context(item.clone(), ev.position, cx);
                     cx.stop_propagation();
                 })
             })
@@ -4130,15 +4133,22 @@ impl Render for Muralist {
         let settings = self.settings_open.then(|| self.render_settings(cx));
         let picker = self.render_picker(cx);
         let sheet = self.render_sheet(cx);
-        let ring = self.render_ring(cx);
+        let context = self.render_context(cx);
         let span_editor = self.render_span_editor(cx);
 
         h_flex()
             .id("root")
             .track_focus(&self.main_focus)
             .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
-                if ev.keystroke.key == "escape" && (this.ring.is_some() || this.picker.is_some()) {
-                    this.ring = None;
+                if this.context.is_some() && !ev.keystroke.modifiers.modified() {
+                    let key = ev.keystroke.key.clone();
+                    if this.context_key(&key, window, cx) {
+                        cx.stop_propagation();
+                        return;
+                    }
+                }
+                if ev.keystroke.key == "escape" && (this.context.is_some() || this.picker.is_some()) {
+                    this.context = None;
                     this.picker = None;
                     cx.stop_propagation();
                     cx.notify();
@@ -4199,7 +4209,7 @@ impl Render for Muralist {
             .when(!self.lightbox, |d| d.child(self.resize_handle(true, cx)).child(self.resize_handle(false, cx)))
             .children(sheet)
             .children(picker)
-            .children(ring)
+            .children(context)
             .children(toast)
             .children(peek_badge)
             .children(span_editor)
