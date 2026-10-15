@@ -37,7 +37,7 @@ fn evaluate_script(script: &str) -> Result<String> {
             &(script,),
         )
         .context("plasmashell evaluateScript failed (is plasmashell running?)")?;
-    Ok(reply.body().deserialize::<String>().unwrap_or_default())
+    reply.body().deserialize::<String>().context("decoding plasmashell's reply")
 }
 
 fn pos_key(x: i32, y: i32) -> String {
@@ -78,7 +78,7 @@ print(hit);
         map = Value::Object(by_pos)
     );
     let out = evaluate_script(&script)?;
-    if out.trim() == "0" {
+    if out.trim().parse::<u32>().unwrap_or(0) == 0 {
         bail!("plasmashell matched no screens; monitor layout may have changed");
     }
     Ok(())
@@ -105,7 +105,7 @@ print(r.join("\n"));
         let Some((pos, img)) = line.split_once('\t') else {
             continue;
         };
-        let path = PathBuf::from(img.trim().trim_start_matches("file://"));
+        let path = url_path(img.trim());
         if let Some(m) = monitors.iter().find(|m| pos_key(m.x, m.y) == pos)
             && path.is_file()
         {
@@ -184,8 +184,17 @@ pub(super) fn apply_lock_per_monitor(images: &BTreeMap<String, PathBuf>, monitor
     kwrite(&["Greeter"], "WallpaperPlugin", LOCK_PLUGIN_ID)
 }
 
+/// A percent-encoded `file://` URL: names with spaces, `#` or `%` survive.
 fn file_url(path: &Path) -> String {
-    format!("file://{}", path.to_string_lossy())
+    url::Url::from_file_path(path).map_or_else(|()| format!("file://{}", path.to_string_lossy()), String::from)
+}
+
+/// The path in a `file://` URL Plasma hands back, decoded.
+fn url_path(url: &str) -> PathBuf {
+    url::Url::parse(url)
+        .ok()
+        .and_then(|u| u.to_file_path().ok())
+        .unwrap_or_else(|| PathBuf::from(url.trim_start_matches("file://")))
 }
 
 fn kread(groups: &[&str], key: &str) -> Option<String> {
@@ -215,7 +224,7 @@ pub(super) fn current_lock(monitors: &[Monitor]) -> Result<BTreeMap<String, Path
     } else if plugin == "org.kde.image"
         && let Some(img) = kread(&["Greeter", "Wallpaper", "org.kde.image", "General"], "Image")
     {
-        let path = PathBuf::from(img.trim_start_matches("file://"));
+        let path = url_path(&img);
         for m in monitors {
             result.insert(m.name.clone(), path.clone());
         }
@@ -238,5 +247,19 @@ mod tests {
         assert!(!current.is_empty(), "no org.kde.image wallpapers found");
         apply_desktop(&current, &monitors).unwrap();
         assert_eq!(current_desktop(&monitors).unwrap(), current);
+    }
+}
+
+#[cfg(test)]
+mod url_tests {
+    use super::{file_url, url_path};
+    use std::path::Path;
+
+    #[test]
+    fn odd_file_names_survive_the_round_trip() {
+        let path = Path::new("/home/me/Pictures/my wall #2 100%.jpg");
+        let url = file_url(path);
+        assert!(url.starts_with("file:///") && !url.contains(' '));
+        assert_eq!(url_path(&url), path);
     }
 }

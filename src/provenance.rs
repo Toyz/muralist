@@ -6,18 +6,19 @@
 //! span slices alike).
 
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, PoisonError};
 
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::config::config_dir;
 use crate::wallhaven::{Tag, Wallpaper};
 
-/// Background threads record too; writes go one at a time.
-static WRITE: Mutex<()> = Mutex::new(());
+/// The store, read from disk once and kept: every thread records through
+/// it, one at a time, and the UI merges the records it gets back instead
+/// of re-reading the whole file after each write.
+static STORE: Mutex<Option<Provenance>> = Mutex::new(None);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Record {
@@ -29,7 +30,7 @@ pub struct Record {
     pub tags: Option<Vec<Tag>>,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Provenance {
     #[serde(default)]
     pub records: BTreeMap<String, Record>,
@@ -39,9 +40,16 @@ fn path() -> PathBuf {
     config_dir().join("provenance.json")
 }
 
+/// Runs `f` on the store, loading it on first use.
+fn with_store<R>(f: impl FnOnce(&mut Provenance) -> R) -> R {
+    let mut store = STORE.lock().unwrap_or_else(PoisonError::into_inner);
+    f(store.get_or_insert_with(|| crate::store::load_json(&path())))
+}
+
 impl Provenance {
+    /// A copy of everything on record.
     pub fn load() -> Self {
-        fs::read_to_string(path()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+        with_store(|p| p.clone())
     }
 
     /// The record for a file muralist wrote, if there is one.
@@ -51,50 +59,45 @@ impl Provenance {
 }
 
 /// Notes that `w` was saved. Keeps the first save time, and any tags
-/// already known.
-pub fn remember(w: &Wallpaper) -> Result<()> {
+/// already known. Returns the record as it now stands.
+pub fn remember(w: &Wallpaper) -> Result<Record> {
     record(w, None)
 }
 
 /// Notes `w` along with its tags.
-pub fn remember_with_tags(w: &Wallpaper, tags: Vec<Tag>) -> Result<()> {
+pub fn remember_with_tags(w: &Wallpaper, tags: Vec<Tag>) -> Result<Record> {
     record(w, Some(tags))
 }
 
-/// Adds tags to a wallpaper already on record, if they're new.
-pub fn set_tags(id: &str, tags: &[Tag]) -> Result<()> {
-    let _guard = WRITE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let mut p = Provenance::load();
-    match p.records.get_mut(id) {
-        Some(r) if r.tags.as_deref() != Some(tags) => r.tags = Some(tags.to_vec()),
-        _ => return Ok(()),
-    }
-    write(&p)
+/// Adds tags to a wallpaper already on record, if they're new. Returns the
+/// updated record, or `None` when nothing changed.
+pub fn set_tags(id: &str, tags: &[Tag]) -> Result<Option<Record>> {
+    with_store(|p| {
+        match p.records.get_mut(id) {
+            Some(r) if r.tags.as_deref() != Some(tags) => r.tags = Some(tags.to_vec()),
+            _ => return Ok(None),
+        }
+        let r = p.records[id].clone();
+        crate::store::save_json(&path(), p)?;
+        Ok(Some(r))
+    })
 }
 
-fn record(w: &Wallpaper, tags: Option<Vec<Tag>>) -> Result<()> {
-    let _guard = WRITE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let mut p = Provenance::load();
-    let r = p.records.entry(w.id.clone()).or_insert_with(|| Record {
-        wallpaper: w.clone(),
-        saved: chrono::Utc::now().timestamp(),
-        tags: None,
-    });
-    r.wallpaper = w.clone();
-    if tags.is_some() {
-        r.tags = tags;
-    }
-    write(&p)
-}
-
-/// Writes to a temporary file, then renames it over the store, so a reader
-/// never sees half of it.
-fn write(p: &Provenance) -> Result<()> {
-    let path = path();
-    fs::create_dir_all(path.parent().unwrap())?;
-    let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, serde_json::to_string_pretty(p)?).with_context(|| format!("writing {}", tmp.display()))?;
-    fs::rename(&tmp, &path).with_context(|| format!("replacing {}", path.display()))
+fn record(w: &Wallpaper, tags: Option<Vec<Tag>>) -> Result<Record> {
+    with_store(|p| {
+        let r = p.records.entry(w.id.clone()).or_insert_with(|| Record {
+            wallpaper: w.clone(),
+            saved: chrono::Utc::now().timestamp(),
+            tags: None,
+        });
+        r.wallpaper = w.clone();
+        if tags.is_some() {
+            r.tags = tags;
+        }
+        let r = r.clone();
+        crate::store::save_json(&path(), p)?;
+        Ok(r)
+    })
 }
 
 /// The Wallhaven ID in a file name: `wallhaven-abc123.jpg`,

@@ -211,7 +211,19 @@ impl Config {
         let path = Self::path();
         let mut cfg = if path.exists() {
             let text = fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
-            toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?
+            match toml::from_str(&text) {
+                Ok(cfg) => cfg,
+                // A torn or hand-broken config shouldn't stop the app: keep
+                // it aside for the user and start from defaults.
+                Err(e) => {
+                    let aside = path.with_extension("toml.bad");
+                    eprintln!("muralist: {} is unreadable ({e}); kept it as {}", path.display(), aside.display());
+                    let _ = fs::rename(&path, &aside);
+                    let cfg = Config::default();
+                    cfg.save()?;
+                    cfg
+                }
+            }
         } else {
             let cfg = Config::default();
             cfg.save()?;
@@ -233,9 +245,7 @@ impl Config {
     }
 
     pub fn save(&self) -> Result<()> {
-        let path = Self::path();
-        fs::create_dir_all(path.parent().unwrap())?;
-        fs::write(&path, toml::to_string_pretty(self)?).with_context(|| format!("writing {}", path.display()))
+        crate::store::write_private(&Self::path(), toml::to_string_pretty(self)?.as_bytes())
     }
 }
 
@@ -285,14 +295,11 @@ impl State {
     }
 
     pub fn load() -> Self {
-        fs::read_to_string(Self::path()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+        crate::store::load_json(&Self::path())
     }
 
     pub fn save(&self) -> Result<()> {
-        let path = Self::path();
-        fs::create_dir_all(path.parent().unwrap())?;
-        fs::write(&path, serde_json::to_string_pretty(self)?)?;
-        Ok(())
+        crate::store::save_json(&Self::path(), self)
     }
 }
 

@@ -2,7 +2,6 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, bail};
@@ -97,7 +96,6 @@ pub fn slice_framed(
     fs::create_dir_all(out_dir)?;
     let stem = src.file_stem().map_or_else(|| "span".into(), |s| s.to_string_lossy().into_owned());
 
-    let mut result = BTreeMap::new();
     // Distinct names per framing: desktops (Plasma, for one) won't reload an image whose path
     // it already shows.
     let tag = if framing == Framing::default() {
@@ -105,16 +103,36 @@ pub fn slice_framed(
     } else {
         format!("-z{:.0}x{:.0}y{:.0}", framing.zoom * 100., framing.pan.0 * 100., framing.pan.1 * 100.)
     };
-    for (m, c) in monitors.iter().zip(crops_framed(img.width(), img.height(), monitors, framing)) {
-        let part =
-            img.crop_imm(c.x, c.y, c.w, c.h).resize_exact(m.px_width, m.px_height, FilterType::Lanczos3).to_rgb8();
-        let dest = out_dir.join(format!("{stem}-span{tag}-{}.jpg", m.name));
-        let file = fs::File::create(&dest)?;
-        JpegEncoder::new_with_quality(BufWriter::new(file), 94)
-            .encode_image(&part)
-            .with_context(|| format!("writing {}", dest.display()))?;
-        result.insert(m.name.clone(), dest);
-    }
+    // Each slice is a big resize and encode of its own: one thread each.
+    let crops = crops_framed(img.width(), img.height(), monitors, framing);
+    let slices: Vec<Result<(String, PathBuf)>> = std::thread::scope(|scope| {
+        let workers: Vec<_> = monitors
+            .iter()
+            .zip(crops)
+            .map(|(m, c)| {
+                let (img, stem, tag) = (&img, &stem, &tag);
+                scope.spawn(move || -> Result<(String, PathBuf)> {
+                    let part = img
+                        .crop_imm(c.x, c.y, c.w, c.h)
+                        .resize_exact(m.px_width, m.px_height, FilterType::Lanczos3)
+                        .to_rgb8();
+                    // Output names come from the system; keep them to safe characters.
+                    let name: String = m
+                        .name
+                        .chars()
+                        .map(|ch| if ch.is_ascii_alphanumeric() || ch == '-' { ch } else { '_' })
+                        .collect();
+                    let dest = out_dir.join(format!("{stem}-span{tag}-{name}.jpg"));
+                    let mut bytes = Vec::new();
+                    JpegEncoder::new_with_quality(&mut bytes, 94).encode_image(&part)?;
+                    crate::store::write_atomic(&dest, &bytes).with_context(|| format!("writing {}", dest.display()))?;
+                    Ok((m.name.clone(), dest))
+                })
+            })
+            .collect();
+        workers.into_iter().map(|w| w.join().unwrap_or_else(|_| Err(anyhow::anyhow!("span worker panicked")))).collect()
+    });
+    let result = slices.into_iter().collect::<Result<BTreeMap<_, _>>>()?;
     Ok(result)
 }
 

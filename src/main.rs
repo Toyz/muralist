@@ -4,6 +4,7 @@ mod gallery;
 mod monitors;
 mod provenance;
 mod span;
+mod store;
 mod thumbs;
 mod ui;
 mod wallhaven;

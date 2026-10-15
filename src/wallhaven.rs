@@ -220,8 +220,16 @@ impl Wallpaper {
     }
 
     /// File name used for the downloaded original, matching Wallhaven's own naming.
+    /// The name comes from remote data, so anything that isn't a plain file
+    /// name (empty, `..`, odd characters) falls back to one built from the id.
     pub fn file_name(&self) -> String {
-        self.path.rsplit('/').next().map_or_else(|| format!("wallhaven-{}.jpg", self.id), str::to_owned)
+        let plain = |n: &&str| {
+            !n.is_empty() && !n.starts_with('.') && n.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+        };
+        self.path.rsplit('/').next().filter(plain).map_or_else(
+            || format!("wallhaven-{}.jpg", self.id.chars().filter(char::is_ascii_alphanumeric).collect::<String>()),
+            str::to_owned,
+        )
     }
 }
 
@@ -333,6 +341,29 @@ impl Client {
         }
     }
 
+    /// GETs the API endpoint at `segments` (each percent-encoded, since
+    /// ids and user names come from outside) and decodes its JSON, with
+    /// Wallhaven's status codes explained the same way everywhere. `what`
+    /// names the request in errors.
+    fn api<T: serde::de::DeserializeOwned>(
+        &self,
+        segments: &[&str],
+        query: &[(&str, String)],
+        what: &str,
+    ) -> Result<T> {
+        let mut url = reqwest::Url::parse(BASE)?;
+        url.path_segments_mut().map_err(|()| anyhow!("bad API base"))?.extend(segments);
+        let resp = self.get(url.as_str()).query(query).send().with_context(|| format!("{what}: request failed"))?;
+        match resp.status().as_u16() {
+            200 => {}
+            401 => bail!("Wallhaven rejected the API key (401)"),
+            404 => bail!("{what}: not found"),
+            429 => bail!("Rate limited by Wallhaven (45 requests/min), wait a moment"),
+            s => bail!("{what}: Wallhaven returned HTTP {s}"),
+        }
+        resp.json().with_context(|| format!("decoding {what}"))
+    }
+
     pub fn search(&self, p: &SearchParams) -> Result<SearchResponse> {
         let mut query: Vec<(&str, String)> = vec![
             ("q", p.query.clone()),
@@ -361,45 +392,22 @@ impl Client {
             query.push(("seed", seed.clone()));
         }
 
-        let resp = self.get(&format!("{BASE}/search")).query(&query).send().context("search request failed")?;
-        match resp.status().as_u16() {
-            200 => {}
-            401 => bail!("Wallhaven rejected the API key (401)"),
-            429 => bail!("Rate limited by Wallhaven (45 requests/min), wait a moment"),
-            s => bail!("Wallhaven returned HTTP {s}"),
-        }
-        resp.json().context("decoding search response")
+        self.api(&["search"], &query, "search")
     }
 
     /// Name and category of a tag id (as used in `id:123` searches).
     pub fn tag(&self, id: u64) -> Result<Tag> {
-        let resp = self.get(&format!("{BASE}/tag/{id}")).send()?;
-        if !resp.status().is_success() {
-            bail!("tag {id}: HTTP {}", resp.status());
-        }
-        Ok(resp.json::<TagResponse>()?.data)
+        Ok(self.api::<TagResponse>(&["tag", &id.to_string()], &[], &format!("tag {id}"))?.data)
     }
 
     pub fn info(&self, id: &str) -> Result<WallpaperInfo> {
-        let resp = self.get(&format!("{BASE}/w/{id}")).send()?;
-        match resp.status().as_u16() {
-            200 => {}
-            429 => bail!("rate limited, try again in a moment"),
-            s => bail!("HTTP {s}"),
-        }
-        Ok(resp.json::<InfoResponse>()?.data)
+        Ok(self.api::<InfoResponse>(&["w", id], &[], &format!("wallpaper {id}"))?.data)
     }
 
     /// A single wallpaper's record by ID (purity, category, colors...) and
     /// its tags.
     pub fn wallpaper(&self, id: &str) -> Result<(Wallpaper, Vec<Tag>)> {
-        let resp = self.get(&format!("{BASE}/w/{id}")).send()?;
-        match resp.status().as_u16() {
-            200 => {}
-            429 => bail!("rate limited, try again in a moment"),
-            s => bail!("HTTP {s}"),
-        }
-        let data = resp.json::<WallpaperResponse>()?.data;
+        let data = self.api::<WallpaperResponse>(&["w", id], &[], &format!("wallpaper {id}"))?.data;
         Ok((data.wallpaper, data.tags))
     }
 
@@ -408,43 +416,20 @@ impl Client {
         if self.api_key.is_none() {
             bail!("importing collections needs an API key");
         }
-        let resp = self.get(&format!("{BASE}/collections")).send().context("collections request failed")?;
-        match resp.status().as_u16() {
-            200 => {}
-            401 => bail!("Wallhaven rejected the API key (401)"),
-            429 => bail!("Rate limited by Wallhaven (45 requests/min), wait a moment"),
-            s => bail!("Wallhaven returned HTTP {s}"),
-        }
-        Ok(resp.json::<CollectionsResponse>().context("decoding collections")?.data)
+        Ok(self.api::<CollectionsResponse>(&["collections"], &[], "collections")?.data)
     }
 
     /// One page of wallpapers in `user`'s collection `id`.
     pub fn collection(&self, user: &str, id: u64, purity: [bool; 3], page: u32) -> Result<SearchResponse> {
         let query = [("purity", bits(purity)), ("page", page.to_string())];
-        let resp = self
-            .get(&format!("{BASE}/collections/{user}/{id}"))
-            .query(&query)
-            .send()
-            .context("collection request failed")?;
-        match resp.status().as_u16() {
-            200 => {}
-            401 => bail!("Wallhaven rejected the API key (401)"),
-            404 => bail!("no collection {id} for user {user}"),
-            429 => bail!("Rate limited by Wallhaven (45 requests/min), wait a moment"),
-            s => bail!("Wallhaven returned HTTP {s}"),
-        }
-        resp.json().context("decoding collection")
+        self.api(&["collections", user, &id.to_string()], &query, &format!("collection {id} of {user}"))
     }
 
     pub fn settings(&self) -> Result<UserSettings> {
         if self.api_key.is_none() {
             bail!("no API key");
         }
-        let resp = self.get(&format!("{BASE}/settings")).send()?;
-        if !resp.status().is_success() {
-            bail!("settings: HTTP {}", resp.status());
-        }
-        Ok(resp.json::<SettingsResponse>()?.data)
+        Ok(self.api::<SettingsResponse>(&["settings"], &[], "settings")?.data)
     }
 
     /// Like [`Self::download`], but splits large files into byte ranges fetched
@@ -469,7 +454,9 @@ impl Client {
         if let Some(dir) = dest.parent() {
             fs::create_dir_all(dir)?;
         }
-        let tmp = dest.with_extension("part");
+        // Unique per call: a cancelled download of the same file can still
+        // be winding down, and must not delete this one's data.
+        let tmp = crate::store::TempFile::beside(dest, "part");
 
         let head = self.http.head(url).send().with_context(|| format!("HEAD {url}"))?;
         let size = head.headers().get(CONTENT_LENGTH).and_then(|v| v.to_str().ok()?.parse::<u64>().ok());
@@ -478,16 +465,21 @@ impl Client {
         match size {
             Some(size) if ranges && size >= MIN_CHUNK * 2 => {
                 progress.total.store(size, Ordering::Relaxed);
-                let file = fs::File::create(&tmp)?;
+                let file = fs::File::create(tmp.path())?;
                 file.set_len(size)?;
                 let chunk = size.div_ceil(MAX_CHUNKS).max(MIN_CHUNK);
                 let chunks = size.div_ceil(chunk) as usize;
                 progress.chunk_count.store(chunks as u32, Ordering::Relaxed);
                 let next = AtomicUsize::new(0);
-                let result = std::thread::scope(|scope| {
+                // One worker failing stops the rest, without touching the
+                // caller's own cancel flag.
+                let abort = AtomicBool::new(false);
+                let stop = || progress.cancelled() || abort.load(Ordering::Relaxed);
+                let mut errors: Vec<anyhow::Error> = std::thread::scope(|scope| {
                     let workers: Vec<_> = (0..workers.max(1).min(chunks))
                         .map(|_| {
                             scope.spawn(|| -> Result<()> {
+                                let mut buf = vec![0u8; 64 * 1024];
                                 loop {
                                     let ix = next.fetch_add(1, Ordering::Relaxed);
                                     if ix >= chunks {
@@ -495,24 +487,25 @@ impl Client {
                                     }
                                     let start = ix as u64 * chunk;
                                     let end = (start + chunk).min(size) - 1;
-                                    if let Err(e) = self.fetch_range(url, &file, start, end, progress) {
-                                        // Stop the other workers' chunks too.
-                                        progress.cancel.store(true, Ordering::Relaxed);
+                                    if let Err(e) = self.fetch_range(url, &file, start, end, progress, &stop, &mut buf)
+                                    {
+                                        abort.store(true, Ordering::Relaxed);
                                         return Err(e);
                                     }
-                                    progress.chunks.fetch_or(1 << ix, Ordering::Relaxed);
+                                    progress.chunks.fetch_or(1 << ix, Ordering::Release);
                                 }
                             })
                         })
                         .collect();
                     workers
                         .into_iter()
-                        .map(|w| w.join().map_err(|_| anyhow!("download worker panicked"))?)
-                        .collect::<Result<Vec<()>>>()
+                        .filter_map(|w| w.join().map_err(|_| anyhow!("download worker panicked")).and_then(|r| r).err())
+                        .collect()
                 });
-                if let Err(e) = result {
-                    let _ = fs::remove_file(&tmp);
-                    return Err(e);
+                // The worker that actually failed, not the ones it stopped.
+                if !errors.is_empty() {
+                    let ix = errors.iter().position(|e| e.to_string() != "cancelled").unwrap_or(0);
+                    return Err(errors.swap_remove(ix));
                 }
             }
             _ => {
@@ -523,11 +516,10 @@ impl Client {
                 if !resp.status().is_success() {
                     bail!("GET {url}: HTTP {}", resp.status());
                 }
-                let mut file = fs::File::create(&tmp)?;
+                let mut file = fs::File::create(tmp.path())?;
                 let mut buf = vec![0u8; 64 * 1024];
                 loop {
                     if progress.cancelled() {
-                        let _ = fs::remove_file(&tmp);
                         bail!("cancelled");
                     }
                     let n = resp.read(&mut buf)?;
@@ -539,26 +531,38 @@ impl Client {
                 }
             }
         }
-        fs::rename(&tmp, dest)?;
+        tmp.persist(dest)?;
         Ok(dest.to_owned())
     }
 
     /// Fetch bytes `start..=end` into `file`, resuming up to twice on errors.
-    fn fetch_range(&self, url: &str, file: &fs::File, start: u64, end: u64, progress: &Progress) -> Result<()> {
+    #[allow(clippy::too_many_arguments)]
+    fn fetch_range(
+        &self,
+        url: &str,
+        file: &fs::File,
+        start: u64,
+        end: u64,
+        progress: &Progress,
+        stop: &dyn Fn() -> bool,
+        buf: &mut [u8],
+    ) -> Result<()> {
         let mut pos = start;
         let mut attempt = 0;
         loop {
+            let mut retryable = true;
             let result = (|| -> Result<()> {
                 let mut resp = self.http.get(url).header(RANGE, format!("bytes={pos}-{end}")).send()?;
                 if resp.status() != StatusCode::PARTIAL_CONTENT {
+                    // Asking again won't change the server's mind.
+                    retryable = false;
                     bail!("server ignored range request (HTTP {})", resp.status());
                 }
-                let mut buf = vec![0u8; 64 * 1024];
                 while pos <= end {
-                    if progress.cancelled() {
+                    if stop() {
                         bail!("cancelled");
                     }
-                    let n = resp.read(&mut buf)?;
+                    let n = resp.read(buf)?;
                     if n == 0 {
                         bail!("connection closed early");
                     }
@@ -571,7 +575,7 @@ impl Client {
             })();
             match result {
                 Ok(()) => return Ok(()),
-                Err(_) if attempt < 2 && !progress.cancelled() => attempt += 1,
+                Err(_) if retryable && attempt < 2 && !stop() => attempt += 1,
                 Err(e) => return Err(e),
             }
         }
@@ -590,12 +594,12 @@ impl Client {
         if !resp.status().is_success() {
             bail!("GET {url}: HTTP {}", resp.status());
         }
-        let tmp = dest.with_extension("part");
-        let mut file = fs::File::create(&tmp)?;
+        let tmp = crate::store::TempFile::beside(dest, "part");
+        let mut file = fs::File::create(tmp.path())?;
         resp.copy_to(&mut file)?;
         file.flush()?;
         drop(file);
-        fs::rename(&tmp, dest)?;
+        tmp.persist(dest)?;
         Ok(dest.to_owned())
     }
 }

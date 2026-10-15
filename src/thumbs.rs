@@ -85,12 +85,12 @@ struct Stack {
 
 impl Stack {
     fn pop(&self) -> Job {
-        let mut jobs = self.jobs.lock().unwrap();
+        let mut jobs = self.jobs.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         loop {
             if let Some(job) = jobs.pop() {
                 return job;
             }
-            jobs = self.ready.wait(jobs).unwrap();
+            jobs = self.ready.wait(jobs).unwrap_or_else(std::sync::PoisonError::into_inner);
         }
     }
 }
@@ -111,7 +111,11 @@ impl ThumbPool {
                 loop {
                     let job = stack.pop();
                     let key = job.key().to_owned();
-                    let result = run(&client, &job).map_err(|e| format!("{e:#}"));
+                    // A decoder panicking on a malformed file fails that job,
+                    // not the worker (and every job it would have run).
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(&client, &job)))
+                        .unwrap_or_else(|_| Err(anyhow::anyhow!("thumbnail worker panicked")))
+                        .map_err(|e| format!("{e:#}"));
                     if done_tx.unbounded_send((key, result)).is_err() {
                         return;
                     }
@@ -122,7 +126,7 @@ impl ThumbPool {
     }
 
     pub fn request(&self, job: Job) {
-        self.stack.jobs.lock().unwrap().push(job);
+        self.stack.jobs.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(job);
         self.stack.ready.notify_one();
     }
 }
@@ -156,7 +160,7 @@ fn run(client: &Client, job: &Job) -> Result<PathBuf> {
                     px.0 = [v, v, v];
                 }
             }
-            img.save(&dest)?;
+            save_png(&dest, &img)?;
             Ok(dest)
         }
         Job::Pixelate { path, .. } => {
@@ -168,7 +172,7 @@ fn run(client: &Client, job: &Job) -> Result<PathBuf> {
             // ~14 blocks across, enlarged with hard edges.
             let tiny = image::open(path)?.thumbnail(14, 14);
             let (w, h) = (tiny.width() * 20, tiny.height() * 20);
-            tiny.resize_exact(w, h, FilterType::Nearest).to_rgb8().save(&dest)?;
+            save_png(&dest, &tiny.resize_exact(w, h, FilterType::Nearest).to_rgb8())?;
             Ok(dest)
         }
         Job::Blur { path, .. } => {
@@ -184,8 +188,7 @@ fn run(client: &Client, job: &Job) -> Result<PathBuf> {
             for px in soft.pixels_mut() {
                 px.0 = px.0.map(|v| (f32::from(v) * 0.36) as u8);
             }
-            let file = std::fs::File::create(&dest)?;
-            JpegEncoder::new_with_quality(std::io::BufWriter::new(file), 85).encode_image(&soft)?;
+            save_jpeg(&dest, &soft, 85)?;
             Ok(dest)
         }
         Job::Fit { path, w, h, .. } => {
@@ -193,14 +196,14 @@ fn run(client: &Client, job: &Job) -> Result<PathBuf> {
             if let Some(hit) = reuse(&dest) {
                 return Ok(hit);
             }
-            std::fs::create_dir_all(&dir)?;
-            let img = image::open(path)?;
-            if img.width() <= *w && img.height() <= *h {
+            // Already small enough: the header says so without decoding it.
+            let (iw, ih) = image::image_dimensions(path)?;
+            if iw <= *w && ih <= *h {
                 return Ok(path.clone());
             }
-            let fitted = img.resize(*w, *h, FilterType::CatmullRom).to_rgb8();
-            let file = std::fs::File::create(&dest)?;
-            JpegEncoder::new_with_quality(std::io::BufWriter::new(file), 92).encode_image(&fitted)?;
+            std::fs::create_dir_all(&dir)?;
+            let fitted = image::open(path)?.resize(*w, *h, FilterType::CatmullRom).to_rgb8();
+            save_jpeg(&dest, &fitted, 92)?;
             Ok(dest)
         }
         Job::Local { path, .. } => {
@@ -212,7 +215,7 @@ fn run(client: &Client, job: &Job) -> Result<PathBuf> {
             let img = image::open(path)?;
             let h =
                 (u64::from(img.height()) * u64::from(LOCAL_THUMB_WIDTH) / u64::from(img.width().max(1))).max(1) as u32;
-            img.thumbnail(LOCAL_THUMB_WIDTH, h).to_rgb8().save(&dest)?;
+            save_jpeg(&dest, &img.thumbnail(LOCAL_THUMB_WIDTH, h).to_rgb8(), 88)?;
             Ok(dest)
         }
     }
@@ -222,13 +225,27 @@ fn run(client: &Client, job: &Job) -> Result<PathBuf> {
 /// time is the cache's "last used", since access times are often off) and
 /// handed back.
 pub fn reuse(dest: &Path) -> Option<PathBuf> {
-    if !dest.is_file() {
-        return None;
-    }
-    if let Ok(f) = std::fs::File::options().write(true).open(dest) {
+    let meta = std::fs::metadata(dest).ok().filter(std::fs::Metadata::is_file)?;
+    // The sweep only needs a rough "last used", so touch at most hourly.
+    let stale = meta.modified().ok().and_then(|t| t.elapsed().ok()).is_none_or(|age| age.as_secs() > 3600);
+    if stale && let Ok(f) = std::fs::File::options().write(true).open(dest) {
         let _ = f.set_modified(std::time::SystemTime::now());
     }
     Some(dest.to_path_buf())
+}
+
+/// Encoded in memory, then written atomically: a crash or a second worker
+/// never leaves a torn image that later reads as a cache hit.
+fn save_png(dest: &Path, img: &image::RgbImage) -> Result<()> {
+    let mut bytes = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)?;
+    crate::store::write_atomic(dest, &bytes)
+}
+
+fn save_jpeg(dest: &Path, img: &image::RgbImage, quality: u8) -> Result<()> {
+    let mut bytes = Vec::new();
+    JpegEncoder::new_with_quality(&mut bytes, quality).encode_image(img)?;
+    crate::store::write_atomic(dest, &bytes)
 }
 
 /// Trims the thumbnail cache to `budget` bytes, least recently used first,
@@ -272,7 +289,12 @@ fn sweep_dir(dir: &Path, budget: u64, keep: &HashSet<PathBuf>) -> (u64, u64) {
 
 /// Where a remote job's file lands in the cache.
 pub fn remote_cache_path(key: &str, url: &str) -> PathBuf {
-    let ext = url.rsplit('.').next().unwrap_or("jpg");
+    // From remote data: only a short alphanumeric extension is trusted.
+    let ext = url
+        .rsplit_once('.')
+        .map(|(_, e)| e)
+        .filter(|e| !e.is_empty() && e.len() <= 5 && e.bytes().all(|b| b.is_ascii_alphanumeric()))
+        .unwrap_or("jpg");
     cache_dir().join("thumbs").join(format!("{}.{ext}", sanitize(key)))
 }
 

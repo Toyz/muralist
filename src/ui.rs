@@ -1638,9 +1638,19 @@ impl Muralist {
                             this.tag_names.insert(tag.id, Some(tag.clone()));
                         }
                         // A saved wallpaper keeps its tags for the Library.
-                        if this.provenance.records.get(&id).is_some_and(|r| r.tags.is_none()) {
-                            let _ = crate::provenance::set_tags(&id, &info.tags);
-                            this.provenance = crate::provenance::Provenance::load();
+                        // Updated here at once, written to disk off the UI thread.
+                        if let Some(r) = this.provenance.records.get_mut(&id)
+                            && r.tags.is_none()
+                        {
+                            r.tags = Some(info.tags.clone());
+                            let (id, tags) = (id.clone(), info.tags.clone());
+                            cx.background_executor()
+                                .spawn(async move {
+                                    if let Err(e) = crate::provenance::set_tags(&id, &tags) {
+                                        eprintln!("saving tags for {id}: {e:#}");
+                                    }
+                                })
+                                .detach();
                         }
                         InfoState::Ready(info)
                     }
@@ -4096,8 +4106,8 @@ impl Muralist {
                     this.identifying_now = None;
                 }
                 match result {
-                    Ok(()) => {
-                        this.provenance = crate::provenance::Provenance::load();
+                    Ok(record) => {
+                        this.provenance.records.insert(id.clone(), record);
                         this.identified_at.insert(id.clone(), Instant::now());
                         // Still looking at it: bring in its details too.
                         if matches!(&this.selected, Some(Item::Local(p)) if *p == path) {
@@ -4160,8 +4170,8 @@ impl Muralist {
                     this.update(cx, |this, _| {
                         this.identifying_now = None;
                         // Each card takes on its purity as soon as it's known.
-                        if got.is_ok() {
-                            this.provenance = crate::provenance::Provenance::load();
+                        if let Ok(record) = got {
+                            this.provenance.records.insert(landed_id.clone(), record);
                             this.identified_at.insert(landed_id, Instant::now());
                         }
                     })

@@ -3,10 +3,9 @@
 //! `~/.config/muralist/galleries.json`, written atomically so a background
 //! service can read it while the app runs.
 
-use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::config::config_dir;
@@ -210,17 +209,11 @@ impl Galleries {
     }
 
     pub fn load() -> Self {
-        fs::read_to_string(Self::path()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+        crate::store::load_json(&Self::path())
     }
 
-    /// Write to a temporary file, then rename over the old one, so a reader
-    /// never sees half a file.
     pub fn save(&self) -> Result<()> {
-        let path = Self::path();
-        fs::create_dir_all(path.parent().unwrap())?;
-        let tmp = path.with_extension("json.tmp");
-        fs::write(&tmp, serde_json::to_string_pretty(self)?).with_context(|| format!("writing {}", tmp.display()))?;
-        fs::rename(&tmp, &path).with_context(|| format!("replacing {}", path.display()))
+        crate::store::save_json(&Self::path(), self)
     }
 
     pub fn get(&self, id: u64) -> Option<&Gallery> {
@@ -297,10 +290,27 @@ pub fn fetch_source(client: &Client, source: &Source, purity: [bool; 3]) -> Resu
         Source::Manual => {}
         Source::Smart { search, limit } => {
             let mut page = 1;
+            // Random order: later pages must use the first page's seed, or
+            // each one shuffles afresh and they overlap.
+            let mut seed = None;
+            let mut seen = std::collections::HashSet::new();
             while out.len() < *limit as usize {
-                let resp = client.search(&search.params(page))?;
+                let mut params = search.params(page);
+                params.seed.clone_from(&seed);
+                let resp = match client.search(&params) {
+                    Ok(resp) => resp,
+                    // Keep what earlier pages found rather than nothing.
+                    Err(e) if !out.is_empty() => {
+                        eprintln!("muralist: smart gallery page {page} failed: {e:#}");
+                        break;
+                    }
+                    Err(e) => return Err(e),
+                };
+                if seed.is_none() {
+                    seed.clone_from(&resp.meta.seed);
+                }
                 let last = resp.meta.last_page;
-                out.extend(resp.data);
+                out.extend(resp.data.into_iter().filter(|w| seen.insert(w.id.clone())));
                 if page >= last {
                     break;
                 }
@@ -311,7 +321,14 @@ pub fn fetch_source(client: &Client, source: &Source, purity: [bool; 3]) -> Resu
         Source::Wallhaven { user, collection, purity: own } => {
             let purity = own.unwrap_or(purity);
             for page in 1..=COLLECTION_PAGES {
-                let resp = client.collection(user, *collection, purity, page)?;
+                let resp = match client.collection(user, *collection, purity, page) {
+                    Ok(resp) => resp,
+                    Err(e) if !out.is_empty() => {
+                        eprintln!("muralist: collection page {page} failed: {e:#}");
+                        break;
+                    }
+                    Err(e) => return Err(e),
+                };
                 let last = resp.meta.last_page;
                 out.extend(resp.data);
                 if page >= last {
