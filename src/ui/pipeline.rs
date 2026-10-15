@@ -115,6 +115,16 @@ impl Muralist {
             .sum()
     }
 
+    /// Throws the plan away: back to what's actually up.
+    pub(super) fn discard_staged(&mut self, cx: &mut Context<Self>) {
+        self.desktop = self.applied.desktop.clone();
+        self.lock = self.applied.lock.clone();
+        self.landing.clear();
+        self.stage_gen += 1;
+        self.set_status("Plan cleared", false, cx);
+        cx.notify();
+    }
+
     /// Width and height of the whole monitor arrangement, in desktop units.
     fn desk_span(&self) -> (f32, f32) {
         let (min_x, min_y, max_x, max_y) = crate::monitors::extent(&self.monitors);
@@ -267,12 +277,22 @@ impl Muralist {
                         let name = name.clone();
                         move |this, drag: &drag::CardDrag, window, cx| {
                             this.select(drag.item.clone(), window, cx);
-                            this.open_composer(ComposeMode::One, Some(name.clone()), cx);
+                            this.open_composer(
+                                ComposeMode::One,
+                                Some(name.clone()),
+                                super::span_editor::ComposeExit::Plan,
+                                cx,
+                            );
                         }
                     }))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         let _ = target;
-                        this.open_composer(ComposeMode::One, Some(name.clone()), cx);
+                        this.open_composer(
+                            ComposeMode::One,
+                            Some(name.clone()),
+                            super::span_editor::ComposeExit::Plan,
+                            cx,
+                        );
                     }))
             })
             .collect();
@@ -490,22 +510,59 @@ impl Muralist {
                 has_selection,
             )
             .when(has_selection, |d| {
-                d.on_click(cx.listener(|this, _, _, cx| this.open_composer(ComposeMode::Every, None, cx)))
+                d.on_click(cx.listener(|this, _, _, cx| {
+                    this.open_composer(ComposeMode::Every, None, super::span_editor::ComposeExit::Plan, cx)
+                }))
             })
             .into_any_element(),
             tile("span", "frame", "Span", "One picture across every screen", has_selection)
-                .when(has_selection, |d| d.on_click(cx.listener(|this, _, _, cx| this.open_span_editor(cx))))
+                .when(has_selection, |d| {
+                    d.on_click(
+                        cx.listener(|this, _, _, cx| this.open_span_editor(super::span_editor::ComposeExit::Plan, cx)),
+                    )
+                })
                 .into_any_element(),
         ];
-        if mode == TargetMode::Lock {
-            tiles.push(
-                tile("copy-desktop", "copy", "Copy", "Use the desktop's wallpapers on the lock screen", true)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.lock = this.applied.desktop.clone();
-                        this.apply(vec![Target::Lock], cx);
-                    }))
+        // Copy one surface's wallpapers onto the other, set at once.
+        if lock_reach.is_some() {
+            let has_desktop = !self.applied.desktop.is_empty();
+            let has_lock = !self.applied.lock.is_empty();
+            if matches!(mode, TargetMode::Lock | TargetMode::Both) {
+                tiles.push(
+                    tile(
+                        "copy-desktop",
+                        "monitor",
+                        "From desktop",
+                        "Plan the desktop's wallpapers for the lock screen",
+                        has_desktop,
+                    )
+                    .when(has_desktop, |d| {
+                        d.on_click(cx.listener(|this, _, _, cx| {
+                            this.lock = this.applied.desktop.clone();
+                            cx.notify();
+                        }))
+                    })
                     .into_any_element(),
-            );
+                );
+            }
+            if matches!(mode, TargetMode::Desktop | TargetMode::Both) {
+                tiles.push(
+                    tile(
+                        "copy-lock",
+                        "lock",
+                        "From lock",
+                        "Plan the lock screen's wallpapers for the desktop",
+                        has_lock,
+                    )
+                    .when(has_lock, |d| {
+                        d.on_click(cx.listener(|this, _, _, cx| {
+                            this.desktop = this.applied.lock.clone();
+                            cx.notify();
+                        }))
+                    })
+                    .into_any_element(),
+                );
+            }
         }
         let cols = tiles.len() as u16;
         let screen_status: AnyElement = if fetching > 0 {
@@ -522,7 +579,7 @@ impl Muralist {
                 .text_xs()
                 .text_color(p.accent)
                 .child(div().size(px(6.)).rounded_full().bg(p.accent))
-                .child(format!("{changes} staged"))
+                .child(format!("{changes} to set"))
                 .into_any_element()
         } else {
             h_flex()
@@ -537,9 +594,9 @@ impl Muralist {
             .gap_3()
             .child(layouts)
             .child(div().text_xs().text_color(p.dim).child(if has_selection {
-                "Click a screen to put the wallpaper there, or drag a card onto one."
+                "Click a screen (or drop a card on one) to arrange it, or use Every screen or Span."
             } else {
-                "Pick a wallpaper first, then click a screen or use Fill all."
+                "Pick a wallpaper first, then arrange it on your screens here."
             }))
             .child(div().grid().grid_cols(cols).gap_2().children(tiles))
             .into_any_element();
@@ -552,33 +609,32 @@ impl Muralist {
         };
 
         // ---- 4. Set ---------------------------------------------------------
-        // Setting always goes through the composer, which puts it up at once.
-        let apply_body = if busy || fetching > 0 {
-            kit::Btn::new("setting")
-                .label("Setting...")
-                .icon("check")
-                .primary()
-                .lg()
-                .full()
-                .loading(true)
-                .into_any_element()
-        } else if has_selection {
-            v_flex()
-                .gap_1p5()
+        // Puts up exactly what step 3 shows.
+        let apply_body = if staged {
+            h_flex()
+                .gap_2()
                 .child(
-                    kit::Btn::new("set-now")
-                        .label("Set as wallpaper")
-                        .icon("wallpaper")
-                        .primary()
-                        .lg()
-                        .full()
-                        .on_click(cx.listener(|this, _, _, cx| this.open_composer(ComposeMode::Every, None, cx))),
+                    div().flex_1().child(
+                        kit::Btn::new("apply")
+                            .label(if fetching > 0 {
+                                format!("Fetching {fetching}")
+                            } else {
+                                format!("Set {changes} screen{}", if changes == 1 { "" } else { "s" })
+                            })
+                            .icon("check")
+                            .primary()
+                            .lg()
+                            .full()
+                            .loading(busy)
+                            .on_click(cx.listener(|this, _, _, cx| this.apply(this.target.targets(), cx))),
+                    ),
                 )
                 .child(
-                    div()
-                        .text_xs()
-                        .text_color(p.dim)
-                        .child("Choose every screen, one screen or a span, frame it if you like, and set it."),
+                    kit::Btn::new("discard")
+                        .icon("undo-2")
+                        .lg()
+                        .tooltip("Throw the plan away: back to what's up now")
+                        .on_click(cx.listener(|this, _, _, cx| this.discard_staged(cx))),
                 )
                 .into_any_element()
         } else {
@@ -587,7 +643,11 @@ impl Muralist {
                 .text_sm()
                 .text_color(p.dim)
                 .child(icon("circle-check").size_4().text_color(p.ok))
-                .child("Your screens are up to date")
+                .child(if has_selection {
+                    "Arrange it in Screens above, then Set it here"
+                } else {
+                    "Your screens are up to date"
+                })
                 .into_any_element()
         };
         let apply = v_flex()

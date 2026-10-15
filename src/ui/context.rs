@@ -105,15 +105,25 @@ impl Muralist {
             // Setting goes through the composer, opened on the right screens.
             Action::SetAll => {
                 self.select(item, window, cx);
-                self.open_composer(super::span_editor::ComposeMode::Every, None, cx);
+                self.open_composer(
+                    super::span_editor::ComposeMode::Every,
+                    None,
+                    super::span_editor::ComposeExit::Set,
+                    cx,
+                );
             }
             Action::SetOn(name) => {
                 self.select(item, window, cx);
-                self.open_composer(super::span_editor::ComposeMode::One, Some(name), cx);
+                self.open_composer(
+                    super::span_editor::ComposeMode::One,
+                    Some(name),
+                    super::span_editor::ComposeExit::Set,
+                    cx,
+                );
             }
             Action::Span => {
                 self.select(item, window, cx);
-                self.open_span_editor(cx);
+                self.open_span_editor(super::span_editor::ComposeExit::Set, cx);
             }
             Action::Similar(id) => {
                 let query = self.similar_query.get(&id).cloned().unwrap_or_else(|| format!("like:{id}"));

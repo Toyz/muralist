@@ -1116,8 +1116,8 @@ pub struct Muralist {
     lb_develop_watch: Option<String>,
     /// The pointer is on the lightbox's Set button: the desk shows the result.
     lb_set_hover: bool,
-    /// A spin's screens, to set together once every original has landed.
-    apply_when_landed: Option<Vec<Target>>,
+    /// How each wallpaper was last composed, this session.
+    compose_memory: HashMap<String, span_editor::ComposeMemory>,
     focus: FocusHandle,
 
     pool: ThumbPool,
@@ -1376,7 +1376,7 @@ impl Muralist {
             lb_drag: None,
             lb_develop_watch: None,
             lb_set_hover: false,
-            apply_when_landed: None,
+            compose_memory: HashMap::new(),
             focus: cx.focus_handle(),
             pool,
             thumbs: HashMap::new(),
@@ -2281,10 +2281,6 @@ impl Muralist {
                         this.refresh_library();
                         if then_apply {
                             this.apply(targets.clone(), cx);
-                        } else if this.landing.is_empty()
-                            && let Some(targets) = this.apply_when_landed.take()
-                        {
-                            this.apply(targets, cx);
                         }
                     }
                     Err(e) => this.set_status(format!("Failed: {e:#}"), true, cx),

@@ -1155,9 +1155,14 @@ impl Muralist {
             }))
             // Setting always goes through the composer: the whole picture on
             // every screen unless you frame it otherwise there.
-            .on_click(
-                cx.listener(|this, _, _, cx| this.open_composer(super::span_editor::ComposeMode::Every, None, cx)),
-            );
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.open_composer(
+                    super::span_editor::ComposeMode::Every,
+                    None,
+                    super::span_editor::ComposeExit::Set,
+                    cx,
+                )
+            }));
         let caption = v_flex()
             .items_center()
             .child(div().text_sm().font_weight(FontWeight::BOLD).text_color(white()).child("Set"))

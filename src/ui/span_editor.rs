@@ -43,7 +43,35 @@ pub(super) struct SpanEdit {
     screens: BTreeMap<String, Framing>,
     /// The screen being framed (Every) or set (One).
     active: String,
+    exit: ComposeExit,
     drag: Option<Point<Pixels>>,
+}
+
+/// What finishing the composer does: from the side panel it arranges the
+/// plan in step 3 (Set in step 4 puts it up); from the lightbox or the
+/// right-click card, where those steps aren't in view, it sets straight away.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum ComposeExit {
+    Plan,
+    Set,
+}
+
+/// How a wallpaper was last composed, so the composer reopens on it as you
+/// left it instead of putting the same picture back on every screen.
+#[derive(Clone)]
+pub(super) struct ComposeMemory {
+    mode: ComposeMode,
+    span: Framing,
+    screens: BTreeMap<String, Framing>,
+    active: String,
+}
+
+/// What the composer remembers a wallpaper by.
+fn memory_key(item: &Item) -> String {
+    match item {
+        Item::Remote(w) => w.id.clone(),
+        Item::Local(path) => path.to_string_lossy().into_owned(),
+    }
 }
 
 impl SpanEdit {
@@ -78,13 +106,19 @@ fn dragged(framing: Framing, dims: (u32, u32), bw: f64, bh: f64, dx: f64, dy: f6
 
 impl Muralist {
     /// Opens the composer on one picture across every screen.
-    pub(super) fn open_span_editor(&mut self, cx: &mut Context<Self>) {
-        self.open_composer(ComposeMode::Span, None, cx);
+    pub(super) fn open_span_editor(&mut self, exit: ComposeExit, cx: &mut Context<Self>) {
+        self.open_composer(ComposeMode::Span, None, exit, cx);
     }
 
     /// Opens the composer for the selected wallpaper; `screen` picks which
     /// one is framed (or set, in One mode), the primary otherwise.
-    pub(super) fn open_composer(&mut self, mode: ComposeMode, screen: Option<String>, cx: &mut Context<Self>) {
+    pub(super) fn open_composer(
+        &mut self,
+        mode: ComposeMode,
+        screen: Option<String>,
+        exit: ComposeExit,
+        cx: &mut Context<Self>,
+    ) {
         let (Some(item), Some(dims)) = (self.selected.clone(), self.selected_dims) else {
             // Unknown size: nothing to frame, so put it up as it is.
             if let Some(item) = self.selected.clone() {
@@ -93,20 +127,50 @@ impl Muralist {
                     (ComposeMode::Span, _) => super::Placement::Span,
                     _ => super::Placement::All,
                 };
-                self.assign_item_then(item, self.target.targets(), placement, true, cx);
+                self.assign_item_then(item, self.target.targets(), placement, exit == ComposeExit::Set, cx);
             }
             return;
         };
         let mut order: Vec<_> = self.monitors.iter().collect();
         order.sort_by_key(|m| (!m.primary, m.x));
+        let plain_open = screen.is_none();
         let active = screen
             .filter(|n| self.monitors.iter().any(|m| m.name == *n))
             .or_else(|| order.first().map(|m| m.name.clone()))
             .unwrap_or_default();
+        // Opened plainly (Set), it comes back exactly as last composed;
+        // opened on a particular screen or mode, that's what it shows, with
+        // the framings remembered.
+        let remembered = self.compose_memory.get(&memory_key(&item)).cloned();
+        let (mode, active) = match &remembered {
+            Some(m) if mode == ComposeMode::Every && plain_open => (m.mode, m.active.clone()),
+            _ => (mode, active),
+        };
+        let (span, screens) = remembered.map_or_else(|| (Framing::default(), BTreeMap::new()), |m| (m.span, m.screens));
         let mode = if self.monitors.len() < 2 && mode == ComposeMode::Span { ComposeMode::Every } else { mode };
         self.context = None;
-        self.span_edit =
-            Some(SpanEdit { item, dims, mode, span: Framing::default(), screens: BTreeMap::new(), active, drag: None });
+        self.span_edit = Some(SpanEdit { item, dims, mode, span, screens, active, exit, drag: None });
+        cx.notify();
+    }
+
+    /// Remembers how the open composer has this wallpaper.
+    fn remember_composition(&mut self) {
+        if let Some(edit) = &self.span_edit {
+            self.compose_memory.insert(
+                memory_key(&edit.item),
+                ComposeMemory {
+                    mode: edit.mode,
+                    span: edit.span,
+                    screens: edit.screens.clone(),
+                    active: edit.active.clone(),
+                },
+            );
+        }
+    }
+
+    fn close_composer(&mut self, cx: &mut Context<Self>) {
+        self.remember_composition();
+        self.span_edit = None;
         cx.notify();
     }
 
@@ -154,12 +218,13 @@ impl Muralist {
 
     /// Renders what the composer shows and sets it, there and then.
     fn commit_span(&mut self, cx: &mut Context<Self>) {
+        self.remember_composition();
         let Some(edit) = self.span_edit.take() else { return };
         let client = self.client.clone();
         let dir = self.cfg.download_dir.clone();
         let monitors = self.monitors.clone();
         let targets = self.target.targets();
-        let SpanEdit { item, mode, span: span_framing, screens, active, .. } = edit;
+        let SpanEdit { item, mode, span: span_framing, screens, active, exit, .. } = edit;
         // Which screens it goes on, and whether anything needs rendering
         // (an untouched framing is just the picture, filled by the desktop).
         let chosen: Vec<_> = match mode {
@@ -202,7 +267,10 @@ impl Muralist {
                             }
                         }
                         this.refresh_library();
-                        this.apply(targets.clone(), cx);
+                        match exit {
+                            ComposeExit::Set => this.apply(targets.clone(), cx),
+                            ComposeExit::Plan => this.set_status("Arranged. Press Set to put it up.", false, cx),
+                        }
                     }
                     Err(e) => this.set_status(format!("Couldn't set it: {e:#}"), true, cx),
                 }
@@ -444,7 +512,9 @@ impl Muralist {
                 .child(target_seg("compose-lock", "Lock", super::TargetMode::Lock))
                 .child(target_seg("compose-both", "Both", super::TargetMode::Both))
         });
+        let exit = self.span_edit.as_ref().map_or(ComposeExit::Set, |e| e.exit);
         let set_label = match mode {
+            _ if exit == ComposeExit::Plan => "Done".to_owned(),
             ComposeMode::Span => "Span it".to_owned(),
             ComposeMode::One => format!("Set on {active}"),
             ComposeMode::Every => {
@@ -536,8 +606,7 @@ impl Muralist {
                     .children(modes)
                     .child(div().flex_1().text_xs().text_color(p.dim).child(hint))
                     .child(icon_button("span-close", "close", p).on_click(cx.listener(|this, _, _, cx| {
-                        this.span_edit = None;
-                        cx.notify();
+                        this.close_composer(cx);
                     }))),
             )
             .child(div().p_6().child(stage))
@@ -548,8 +617,7 @@ impl Muralist {
                         .children(surfaces)
                         .child(button("span-cancel", "Cancel", BtnKind::Secondary, p).on_click(cx.listener(
                             |this, _, _, cx| {
-                                this.span_edit = None;
-                                cx.notify();
+                                this.close_composer(cx);
                             },
                         )))
                         .child(
@@ -574,8 +642,7 @@ impl Muralist {
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|this, _, _, cx| {
-                        this.span_edit = None;
-                        cx.notify();
+                        this.close_composer(cx);
                     }),
                 )
                 .child(card)
