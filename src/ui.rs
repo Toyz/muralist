@@ -5,6 +5,7 @@ mod details;
 mod develop;
 mod dossier;
 mod drag;
+mod fitlab;
 mod galleries;
 mod gallery_edit;
 mod gallery_pop;
@@ -1039,6 +1040,8 @@ pub struct Muralist {
     /// The pointer is over the settings gear, which spins up.
     gear_hover: bool,
     gear_angle: f32,
+    /// How the fit lab looks at the selection: spanned or per screen.
+    fit_mode: fitlab::FitMode,
     gear_tick: Instant,
     /// Which Info/Similar dossier the pointer is on.
     dossier_hover: Option<u8>,
@@ -1318,6 +1321,7 @@ impl Muralist {
             last_rotation: Instant::now(),
             gear_hover: false,
             gear_angle: 0.,
+            fit_mode: fitlab::FitMode::default(),
             gear_tick: Instant::now(),
             dossier_hover: None,
             like_blocked: false,

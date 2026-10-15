@@ -267,7 +267,7 @@ impl Muralist {
                 .into_any_element(),
         };
 
-        let fit = self.render_fit_check(w);
+        let fit = self.render_fit_check(w, c, cx);
         let palette = self.render_xray_palette(cx);
         v_flex()
             .gap_5()
