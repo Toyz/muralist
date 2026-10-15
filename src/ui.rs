@@ -2068,23 +2068,54 @@ impl Muralist {
         let tab = self.tab;
         let has_key = self.client.has_key();
 
-        let nav = |id: &'static str, label: &'static str, t: Tab| {
-            // Tight padding: four labels share the sidebar's width.
-            segment(id, label, tab == t, p).px_0().on_click(cx.listener(move |this, _, _, cx| {
-                match t {
-                    Tab::Library => this.refresh_library(),
-                    Tab::Galleries => return this.show_galleries(cx),
-                    _ => {}
-                }
-                this.tab = t;
-                cx.notify();
-            }))
+        // The current tab spells itself out; the others fold to icons.
+        let nav = |id: &'static str, icon_name: &'static str, label: &'static str, t: Tab| {
+            let on = tab == t;
+            h_flex()
+                .id(id)
+                .h(px(32.))
+                .justify_center()
+                .gap_2()
+                .rounded_md()
+                .cursor_pointer()
+                .map(|d| {
+                    if on {
+                        d.flex_1()
+                            .px_3()
+                            .bg(p.elevated)
+                            .shadow_sm()
+                            .text_color(p.fg)
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(icon(icon_name).size_4().text_color(p.accent))
+                            .child(div().text_sm().child(label).with_animation(
+                                SharedString::from(format!("nav-label-{id}")),
+                                Animation::new(std::time::Duration::from_millis(220)).with_easing(ease_out_quint()),
+                                |d, t| d.opacity(t),
+                            ))
+                    } else {
+                        d.w(px(40.))
+                            .flex_none()
+                            .text_color(p.muted)
+                            .hover(move |s| s.bg(with_alpha(p.elevated, 0.6)).text_color(p.fg))
+                            .tooltip(move |window, cx| Tooltip::new(label).build(window, cx))
+                            .child(icon(icon_name).size_4())
+                    }
+                })
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    match t {
+                        Tab::Library => this.refresh_library(),
+                        Tab::Galleries => return this.show_galleries(cx),
+                        _ => {}
+                    }
+                    this.tab = t;
+                    cx.notify();
+                }))
         };
         let nav = segmented_track(p)
-            .child(nav("nav-discover", "Discover", Tab::Discover))
-            .child(nav("nav-library", "Library", Tab::Library))
-            .child(nav("nav-galleries", "Galleries", Tab::Galleries))
-            .child(nav("nav-history", "History", Tab::History));
+            .child(nav("nav-discover", "compass", "Discover", Tab::Discover))
+            .child(nav("nav-library", "folder", "Library", Tab::Library))
+            .child(nav("nav-galleries", "images", "Galleries", Tab::Galleries))
+            .child(nav("nav-history", "calendar", "History", Tab::History));
 
         let mut cards = v_flex().gap_3().px_3().py_3();
         if tab == Tab::Discover {
