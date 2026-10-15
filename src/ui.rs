@@ -1599,7 +1599,7 @@ impl Muralist {
         match &self.selected {
             Some(Item::Remote(w)) => w.id == id,
             // A saved file is the wallpaper whose ID is in its name.
-            Some(Item::Local(path)) => crate::provenance::wallhaven_id(path).as_deref() == Some(id),
+            Some(Item::Local(path)) => crate::provenance::wallhaven_id(path) == Some(id),
             None => false,
         }
     }
@@ -2896,7 +2896,7 @@ impl Muralist {
                             d.child(div().flex_none().text_xs().text_color(p.dim).child(if self.lib_filter.active() {
                                 format!(
                                     "{} of {} wallpapers",
-                                    thousands(self.library_items().len() as u64),
+                                    thousands(self.library_count() as u64),
                                     thousands(n as u64)
                                 )
                             } else {
@@ -4075,7 +4075,7 @@ impl Muralist {
 
     /// Looks up what a saved file is, straight away (it was just selected).
     fn lookup_provenance(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        let Some(id) = crate::provenance::wallhaven_id(&path) else { return };
+        let Some(id) = crate::provenance::wallhaven_id(&path).map(str::to_owned) else { return };
         if !self.provenance_pending.insert(id.clone()) {
             return;
         }
@@ -4122,7 +4122,7 @@ impl Muralist {
             .library
             .iter()
             .filter(|p| self.provenance.of(p).is_none_or(|r| r.tags.is_none()))
-            .filter_map(|p| crate::provenance::wallhaven_id(p))
+            .filter_map(|p| crate::provenance::wallhaven_id(p).map(str::to_owned))
             .collect();
         ids.sort();
         ids.dedup();

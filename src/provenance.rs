@@ -46,7 +46,7 @@ impl Provenance {
 
     /// The record for a file muralist wrote, if there is one.
     pub fn of(&self, file: &Path) -> Option<&Record> {
-        self.records.get(&wallhaven_id(file)?)
+        self.records.get(wallhaven_id(file)?)
     }
 }
 
@@ -100,11 +100,11 @@ fn write(p: &Provenance) -> Result<()> {
 /// The Wallhaven ID in a file name: `wallhaven-abc123.jpg`,
 /// `full-abc123.png` (cached originals), or a span slice cut from one,
 /// `wallhaven-abc123-span-DP-1.jpg`.
-pub fn wallhaven_id(file: &Path) -> Option<String> {
+pub fn wallhaven_id(file: &Path) -> Option<&str> {
     let stem = file.file_stem()?.to_str()?;
     let rest = stem.strip_prefix("wallhaven-").or_else(|| stem.strip_prefix("full-"))?;
-    let id: String = rest.chars().take_while(char::is_ascii_alphanumeric).collect();
-    (id.len() >= 4).then_some(id)
+    let end = rest.bytes().position(|b| !b.is_ascii_alphanumeric()).unwrap_or(rest.len());
+    (end >= 4).then(|| &rest[..end])
 }
 
 #[cfg(test)]

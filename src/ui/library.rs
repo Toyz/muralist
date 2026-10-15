@@ -37,7 +37,6 @@ pub(super) struct LibFilter {
     pub all_groups: bool,
     /// Bumped on every change, so the cards deal in again.
     pub generation: u64,
-    pub changed: Option<Instant>,
 }
 
 impl LibFilter {
@@ -63,7 +62,7 @@ pub(super) enum Scan {
 enum Stage {
     Purity(String),
     Category(String),
-    Tag(u64, String),
+    Tag(u64),
 }
 
 const PURITIES: [(&str, &str); 3] = [("sfw", "SFW"), ("sketchy", "Sketchy"), ("nsfw", "NSFW")];
@@ -80,6 +79,7 @@ fn category_label(c: &str) -> &'static str {
 impl Muralist {
     // ---- filtering ----------------------------------------------------------
 
+    /// Runs per file per frame, so it allocates nothing.
     fn passes(&self, path: &std::path::Path, stages: &[Stage]) -> bool {
         if stages.is_empty() {
             return true;
@@ -88,36 +88,50 @@ impl Muralist {
         let Some(r) = self.provenance.of(path) else { return false };
         let w = &r.wallpaper;
         // Purities and categories match any picked; tags match all.
-        let purities: Vec<&String> =
-            stages.iter().filter_map(|s| if let Stage::Purity(p) = s { Some(p) } else { None }).collect();
-        let categories: Vec<&String> =
-            stages.iter().filter_map(|s| if let Stage::Category(c) = s { Some(c) } else { None }).collect();
-        (purities.is_empty() || purities.contains(&&w.purity))
-            && (categories.is_empty() || categories.contains(&&w.category))
-            && stages.iter().all(|s| match s {
-                Stage::Tag(id, _) => r.tags.as_ref().is_some_and(|tags| tags.iter().any(|t| t.id == *id)),
-                _ => true,
-            })
+        let (mut purity, mut category) = (None, None);
+        for stage in stages {
+            match stage {
+                Stage::Purity(p) => purity = Some(purity.unwrap_or(false) || *p == w.purity),
+                Stage::Category(c) => category = Some(category.unwrap_or(false) || *c == w.category),
+                Stage::Tag(id) => {
+                    if !r.tags.as_ref().is_some_and(|tags| tags.iter().any(|t| t.id == *id)) {
+                        return false;
+                    }
+                }
+            }
+        }
+        purity.unwrap_or(true) && category.unwrap_or(true)
+    }
+
+    /// A picked tag's name: from the tag cache, else any record carrying it.
+    fn lib_tag_name(&self, id: u64) -> String {
+        if let Some(Some(t)) = self.tag_names.get(&id) {
+            return t.name.clone();
+        }
+        self.provenance
+            .records
+            .values()
+            .flat_map(|r| r.tags.iter().flatten())
+            .find(|t| t.id == id)
+            .map_or_else(|| format!("{id}"), |t| t.name.clone())
     }
 
     /// The filter as an ordered list of stages: purity, then category, then
     /// tags in the order picked.
     fn stages(&self) -> Vec<Stage> {
         let f = &self.lib_filter;
-        let tag_name = |id: u64| {
-            self.provenance
-                .records
-                .values()
-                .flat_map(|r| r.tags.iter().flatten())
-                .find(|t| t.id == id)
-                .map_or_else(|| format!("#{id}"), |t| t.name.clone())
-        };
         f.purity
             .iter()
             .map(|p| Stage::Purity(p.clone()))
             .chain(f.category.iter().map(|c| Stage::Category(c.clone())))
-            .chain(f.tags.iter().map(|&id| Stage::Tag(id, tag_name(id))))
+            .chain(f.tags.iter().map(|&id| Stage::Tag(id)))
             .collect()
+    }
+
+    /// How many files the filter lets through, without listing them.
+    pub(super) fn library_count(&self) -> usize {
+        let stages = self.stages();
+        self.library.iter().filter(|p| self.passes(p, &stages)).count()
     }
 
     pub(super) fn library_items(&self) -> Vec<Item> {
@@ -127,7 +141,6 @@ impl Muralist {
 
     fn touch_filter(&mut self, cx: &mut Context<Self>) {
         self.lib_filter.generation += 1;
-        self.lib_filter.changed = Some(Instant::now());
         self.deal();
         cx.notify();
     }
@@ -153,7 +166,7 @@ impl Muralist {
             Stage::Category(c) => {
                 self.lib_filter.category.remove(c);
             }
-            Stage::Tag(id, _) => self.lib_filter.tags.retain(|t| t != id),
+            Stage::Tag(id) => self.lib_filter.tags.retain(|t| t != id),
         }
         self.touch_filter(cx);
     }
@@ -194,13 +207,13 @@ impl Muralist {
     pub(super) fn scan_state(&self, item: &Item) -> Scan {
         let Item::Local(path) = item else { return Scan::None };
         let Some(id) = wallhaven_id(path) else { return Scan::None };
-        if self.identifying_now.as_deref() == Some(id.as_str()) {
+        if self.identifying_now.as_deref() == Some(id) {
             return Scan::Scanning;
         }
-        if let Some(at) = self.identified_at.get(&id).filter(|at| at.elapsed() < LANDED) {
+        if let Some(at) = self.identified_at.get(id).filter(|at| at.elapsed() < LANDED) {
             return Scan::Landed(*at);
         }
-        let known = self.provenance.records.get(&id).is_some_and(|r| r.tags.is_some());
+        let known = self.provenance.records.get(id).is_some_and(|r| r.tags.is_some());
         if self.identifying.is_some() && !known { Scan::Waiting } else { Scan::None }
     }
 
@@ -319,7 +332,7 @@ impl Muralist {
             let (label, tint) = match &stage {
                 Stage::Purity(pu) => (purity_label(pu).to_owned(), Some(purity_color(pu))),
                 Stage::Category(c) => (category_label(c).to_owned(), None),
-                Stage::Tag(_, name) => (format!("#{name}"), None),
+                Stage::Tag(id) => (format!("#{}", self.lib_tag_name(*id)), None),
             };
             let remove = stage.clone();
             row = row.child(icon("chevron-right").size_3p5().text_color(p.dim)).child(
@@ -367,24 +380,20 @@ impl Muralist {
     /// The Library tab's sidebar: purity, category and tags, with counts.
     pub(super) fn render_library_side(&mut self, cx: &mut Context<Self>) -> Div {
         let p = pal();
-        let mut purity_n: HashMap<String, usize> = HashMap::new();
-        let mut category_n: HashMap<String, usize> = HashMap::new();
+        // Counted every frame, so borrowed rather than copied.
+        let mut purity_n: HashMap<&str, usize> = HashMap::new();
+        let mut category_n: HashMap<&str, usize> = HashMap::new();
         // Tag id -> (name, its own purity, count), grouped by tag category.
-        let mut groups: BTreeMap<String, HashMap<u64, (String, String, usize)>> = BTreeMap::new();
+        let mut groups: BTreeMap<&str, HashMap<u64, (&str, &str, usize)>> = BTreeMap::new();
         let mut known = 0;
         for path in &self.library {
             let Some(r) = self.provenance.of(path) else { continue };
             known += 1;
-            *purity_n.entry(r.wallpaper.purity.clone()).or_default() += 1;
-            *category_n.entry(r.wallpaper.category.clone()).or_default() += 1;
+            *purity_n.entry(&r.wallpaper.purity).or_default() += 1;
+            *category_n.entry(&r.wallpaper.category).or_default() += 1;
             for t in r.tags.iter().flatten() {
-                let cat = if t.category.is_empty() { "Other".to_owned() } else { t.category.clone() };
-                groups
-                    .entry(cat)
-                    .or_default()
-                    .entry(t.id)
-                    .or_insert_with(|| (t.name.clone(), t.purity.clone(), 0))
-                    .2 += 1;
+                let cat = if t.category.is_empty() { "Other" } else { &t.category };
+                groups.entry(cat).or_default().entry(t.id).or_insert((&t.name, &t.purity, 0)).2 += 1;
             }
         }
         let unknown = self.library.len() - known;
@@ -438,7 +447,7 @@ impl Muralist {
         let query = self.lib_tag_query.read(cx).value().trim().to_lowercase();
         let hide = self.cfg.spoiler;
         let picked = self.lib_filter.tags.clone();
-        let mut grouped: Vec<(String, Vec<(u64, String, String, usize)>)> = groups
+        let mut grouped: Vec<(&str, Vec<(u64, &str, &str, usize)>)> = groups
             .into_iter()
             .map(|(cat, tags)| {
                 let mut v: Vec<_> = tags
@@ -453,26 +462,26 @@ impl Muralist {
             })
             .filter(|(_, v)| !v.is_empty())
             .collect();
-        grouped.sort_by_key(|(cat, v)| (std::cmp::Reverse(v.iter().map(|t| t.3).sum::<usize>()), cat.clone()));
+        grouped.sort_by_key(|(cat, v)| (std::cmp::Reverse(v.iter().map(|t| t.3).sum::<usize>()), *cat));
         let tag_total: usize = grouped.iter().map(|(_, v)| v.len()).sum();
         let group_count = grouped.len();
         let groups_shown = if self.lib_filter.all_groups || !query.is_empty() { group_count } else { GROUPS_SHOWN };
 
         let mut tag_sections: Vec<AnyElement> = Vec::new();
         for (cat, tags) in grouped.into_iter().take(groups_shown) {
-            let open = self.lib_filter.open_groups.contains(&cat) || !query.is_empty();
+            let open = self.lib_filter.open_groups.contains(cat) || !query.is_empty();
             let shown = if open { tags.len() } else { TAGS_PER_GROUP.min(tags.len()) };
             let more = tags.len() - shown;
             let chips = tags.into_iter().take(shown).map(|(id, name, purity, n)| {
                 let on = picked.contains(&id);
                 pop(
-                    tag_chip(id, name, &purity, n, on, hide.hides(&purity), p)
+                    tag_chip(id, name, purity, n, on, hide.hides(purity), p)
                         .on_click(cx.listener(move |this, _, _, cx| this.toggle_tag(id, cx))),
                     on,
                     format!("tag-pop-{id}-{generation_n}"),
                 )
             });
-            let cat_key = cat.clone();
+            let cat_key = cat.to_owned();
             tag_sections.push(
                 v_flex()
                     .gap_1p5()
@@ -619,13 +628,13 @@ fn funnel_step(
 
 /// A tag chip: its own purity as a dot and tinted edge, masked behind the
 /// spoiler setting until hovered, like the cards it belongs to.
-fn tag_chip(id: u64, name: String, purity: &str, n: usize, on: bool, masked: bool, p: Pal) -> Stateful<Div> {
+fn tag_chip(id: u64, name: &str, purity: &str, n: usize, on: bool, masked: bool, p: Pal) -> Stateful<Div> {
     let tint = (purity != "sfw").then(|| purity_color(purity));
     let group = SharedString::from(format!("tag-{id}"));
     let label = if masked {
         div()
             .relative()
-            .child(div().invisible().group_hover(group.clone(), gpui_kit::Styled::visible).child(name))
+            .child(div().invisible().group_hover(group.clone(), gpui_kit::Styled::visible).child(name.to_owned()))
             .child(
                 div()
                     .absolute()
@@ -635,7 +644,7 @@ fn tag_chip(id: u64, name: String, purity: &str, n: usize, on: bool, masked: boo
                     .group_hover(group.clone(), gpui_kit::Styled::invisible),
             )
     } else {
-        div().child(name)
+        div().child(name.to_owned())
     };
     h_flex()
         .id(("lib-tag", id as usize))
