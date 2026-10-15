@@ -21,8 +21,10 @@ const MIN_H: f32 = 330.;
 /// Corner radius of the lifted card.
 const R: f32 = 14.;
 /// Room for the screens along the top.
-const DESK_W: f32 = 150.;
-const DESK_H: f32 = 34.;
+const DESK_W: f32 = 230.;
+const DESK_H: f32 = 48.;
+/// `context_hover` value meaning the All button.
+const ALL: usize = usize::MAX;
 
 pub(super) struct ContextMenu {
     pub item: Item,
@@ -233,94 +235,196 @@ impl Muralist {
         let fetching = self.context_fetch(&item);
 
         // ---- the screens, along the top of the image ----
+        // Little monitors on stands, at their real proportions, each showing
+        // what's on it now. Hover one and this wallpaper wipes across it;
+        // hover All and they wipe in one after another.
         let desk = can_set.then(|| {
             let min_x = self.monitors.iter().map(|m| m.x).min().unwrap_or(0);
             let min_y = self.monitors.iter().map(|m| m.y).min().unwrap_or(0);
             let max_x = self.monitors.iter().map(|m| m.x + m.width as i32).max().unwrap_or(1);
             let max_y = self.monitors.iter().map(|m| m.y + m.height as i32).max().unwrap_or(1);
             let scale = (DESK_W / (max_x - min_x).max(1) as f32).min(DESK_H / (max_y - min_y).max(1) as f32);
-            let gap = 4.;
-            let screens =
-                self.monitors.clone().into_iter().enumerate().map(|(i, m)| {
+            let gap = 8.;
+            let all_hover = self.context_hover == Some(ALL);
+            let hover = self.context_hover;
+            let caption = match hover {
+                Some(ALL) => "Set on every screen".to_owned(),
+                Some(i) => self.monitors.get(i).map_or_else(String::new, |m| {
+                    format!("Set on {}{}", m.name, if m.primary { " (primary)" } else { "" })
+                }),
+                None => "Pick a screen".to_owned(),
+            };
+            let monitors = self.monitors.clone();
+            let screens: Vec<AnyElement> = monitors
+                .into_iter()
+                .enumerate()
+                .map(|(i, m)| {
                     let (sw, sh) = (m.width as f32 * scale - gap, m.height as f32 * scale - gap);
-                    let hovered = self.context_hover == Some(i);
+                    // Inside the bezel.
+                    let (iw, ih) = (sw - 4., sh - 4.);
+                    let lit = hover == Some(i) || all_hover;
+                    let now = self.desktop.get(&m.name).cloned().and_then(|p| self.local_thumb(&p));
                     let name = m.name.clone();
+                    let wipe = thumb.clone().filter(|_| lit).map(|t| {
+                        let delay = if all_hover { i as f32 * 0.09 } else { 0. };
+                        div()
+                            .absolute()
+                            .top(px(2.))
+                            .left(px(2.))
+                            .h(px(ih))
+                            .overflow_hidden()
+                            .child(radius(boxed(img(t), iw, ih).object_fit(ObjectFit::Cover), 3.))
+                            // A bright leading edge rides the wipe.
+                            .child(div().absolute().top_0().bottom_0().right_0().w(px(2.)).bg(with_alpha(c, 0.95)))
+                            .with_animation(
+                                SharedString::from(format!("ctx-wipe-{i}-{}", if all_hover { "all" } else { "one" })),
+                                Animation::new(std::time::Duration::from_secs_f32(0.32 + delay)),
+                                move |d, t| {
+                                    let t = ((t * (0.32 + delay) - delay) / 0.32).clamp(0., 1.);
+                                    let e = 1. - (1. - t).powi(3);
+                                    d.w(px(iw * e))
+                                },
+                            )
+                    });
+                    let x = (m.x - min_x) as f32 * scale + gap / 2.;
+                    let y = (m.y - min_y) as f32 * scale + gap / 2.;
                     div()
-                        .id(("ctx-screen", i))
                         .absolute()
-                        .left(px((m.x - min_x) as f32 * scale + gap / 2.))
-                        .top(px((m.y - min_y) as f32 * scale + gap / 2.))
+                        .left(px(x))
+                        .top(px(y))
                         .w(px(sw))
-                        .h(px(sh))
-                        .map(|d| radius(d, 5.))
-                        .bg(hsla(0., 0., 0., 0.55))
-                        .cursor_pointer()
-                        // Hover ghosts the wallpaper onto that screen.
-                        .when_some(thumb.clone().filter(|_| hovered), |d, t| {
-                            d.child(radius(boxed(img(t), sw, sh).object_fit(ObjectFit::Cover), 5.))
-                        })
+                        .h(px(sh + 9.))
+                        // The monitor.
+                        .child(
+                            div()
+                                .id(("ctx-screen", i))
+                                .relative()
+                                .w(px(sw))
+                                .h(px(sh))
+                                .rounded_md()
+                                .bg(hsla(0., 0., 0.04, 0.95))
+                                .cursor_pointer()
+                                .when_some(now, |d, t| {
+                                    d.child(
+                                        div()
+                                            .absolute()
+                                            .top(px(2.))
+                                            .left(px(2.))
+                                            .opacity(if lit { 0.35 } else { 0.6 })
+                                            .child(radius(boxed(img(t), iw, ih).object_fit(ObjectFit::Cover), 3.)),
+                                    )
+                                })
+                                .children(wipe)
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .top(px(4.))
+                                        .left(px(4.))
+                                        .px_1()
+                                        .rounded_sm()
+                                        .bg(hsla(0., 0., 0., 0.6))
+                                        .text_size(px(9.))
+                                        .text_color(white())
+                                        .child(format!("{}", i + 1)),
+                                )
+                                .when(m.primary, |d| {
+                                    d.child(
+                                        div()
+                                            .absolute()
+                                            .top(px(4.))
+                                            .right(px(4.))
+                                            .child(icon("star-fill").size(px(8.)).text_color(gpui_kit::rgb(0xfbbf24))),
+                                    )
+                                })
+                                // The bezel, on top, glowing in the image's color when lit.
+                                .child(div().absolute().inset_0().rounded_md().border_1().border_color(if lit {
+                                    c
+                                } else {
+                                    hsla(0., 0., 1., 0.3)
+                                }))
+                                .on_hover(cx.listener(move |this, over: &bool, _, cx| {
+                                    let next = if *over { Some(i) } else { this.context_hover.filter(|h| *h != i) };
+                                    if this.context_hover != next {
+                                        this.context_hover = next;
+                                        cx.notify();
+                                    }
+                                }))
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.run_context(Action::SetOn(name.clone()), window, cx)
+                                })),
+                        )
+                        // The stand: a neck and a foot.
+                        .child(div().absolute().top(px(sh)).left(px(sw / 2. - 2.)).w(px(4.)).h(px(6.)).bg(if lit {
+                            with_alpha(c, 0.8)
+                        } else {
+                            hsla(0., 0., 1., 0.25)
+                        }))
                         .child(
                             div()
                                 .absolute()
-                                .inset_0()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .text_size(px(10.))
-                                .text_color(white())
-                                .child(format!("{}", i + 1)),
+                                .top(px(sh + 6.))
+                                .left(px(sw / 2. - 11.))
+                                .w(px(22.))
+                                .h(px(3.))
+                                .rounded_full()
+                                .bg(if lit { with_alpha(c, 0.8) } else { hsla(0., 0., 1., 0.25) }),
                         )
-                        .child(div().absolute().inset_0().map(|d| radius(d, 5.)).border_1().border_color(if hovered {
-                            c
-                        } else {
-                            hsla(0., 0., 1., 0.45)
-                        }))
-                        .tooltip(move |window, cx| {
-                            gpui_kit::component::tooltip::Tooltip::new(format!("Set on {} ({})", m.name, i + 1))
-                                .build(window, cx)
-                        })
-                        .on_hover(cx.listener(move |this, over: &bool, _, cx| {
-                            let next = if *over { Some(i) } else { this.context_hover.filter(|h| *h != i) };
-                            if this.context_hover != next {
-                                this.context_hover = next;
-                                cx.notify();
-                            }
-                        }))
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.run_context(Action::SetOn(name.clone()), window, cx)
-                        }))
-                });
-            h_flex()
-                .gap_2()
-                .p_1p5()
+                        .into_any_element()
+                })
+                .collect();
+            let desk_h = (max_y - min_y) as f32 * scale + 9.;
+            v_flex()
+                .gap_1p5()
+                .p_2()
                 .rounded_lg()
-                .bg(hsla(0., 0., 0., 0.45))
+                .bg(hsla(0., 0., 0., 0.5))
                 .border_1()
                 .border_color(hsla(0., 0., 1., 0.12))
                 .child(
-                    div()
-                        .relative()
-                        .flex_none()
-                        .w(px((max_x - min_x) as f32 * scale))
-                        .h(px((max_y - min_y) as f32 * scale))
-                        .children(screens),
+                    h_flex()
+                        .gap_2()
+                        .items_end()
+                        .child(
+                            div()
+                                .relative()
+                                .flex_none()
+                                .w(px((max_x - min_x) as f32 * scale))
+                                .h(px(desk_h))
+                                .children(screens),
+                        )
+                        .child(
+                            div()
+                                .id("ctx-all")
+                                .mb(px(9.))
+                                .px_2p5()
+                                .h(px(26.))
+                                .flex()
+                                .items_center()
+                                .rounded_md()
+                                .border_1()
+                                .border_color(if all_hover { c } else { hsla(0., 0., 1., 0.4) })
+                                .bg(if all_hover { with_alpha(c, 0.35) } else { hsla(0., 0., 0., 0.3) })
+                                .text_xs()
+                                .text_color(white())
+                                .cursor_pointer()
+                                .child("All")
+                                .on_hover(cx.listener(move |this, over: &bool, _, cx| {
+                                    let next = if *over { Some(ALL) } else { this.context_hover.filter(|h| *h != ALL) };
+                                    if this.context_hover != next {
+                                        this.context_hover = next;
+                                        cx.notify();
+                                    }
+                                }))
+                                .on_click(
+                                    cx.listener(|this, _, window, cx| this.run_context(Action::SetAll, window, cx)),
+                                ),
+                        ),
                 )
                 .child(
                     div()
-                        .id("ctx-all")
-                        .px_2()
-                        .h(px((max_y - min_y) as f32 * scale - gap))
-                        .flex()
-                        .items_center()
-                        .rounded_md()
-                        .border_1()
-                        .border_color(hsla(0., 0., 1., 0.45))
-                        .text_xs()
-                        .text_color(white())
-                        .cursor_pointer()
-                        .hover(move |s| s.border_color(c).bg(with_alpha(c, 0.35)))
-                        .child("All")
-                        .on_click(cx.listener(|this, _, window, cx| this.run_context(Action::SetAll, window, cx))),
+                        .text_size(px(10.))
+                        .text_color(if hover.is_some() { white() } else { hsla(0., 0., 1., 0.55) })
+                        .child(caption),
                 )
         });
 
