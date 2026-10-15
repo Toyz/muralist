@@ -969,6 +969,8 @@ pub struct Muralist {
     context_hover: Option<usize>,
     /// The context card's gallery list is open.
     context_galleries: bool,
+    /// Counts openings of the context card.
+    context_seq: u64,
     /// Gallery whose name is being edited in the top bar.
     renaming: Option<u64>,
     /// Gallery whose delete button is waiting for a second click.
@@ -1202,6 +1204,7 @@ impl Muralist {
             context: None,
             context_hover: None,
             context_galleries: false,
+            context_seq: 0,
             renaming: None,
             confirm_delete: None,
             gallery_name,
@@ -4149,7 +4152,7 @@ impl Render for Muralist {
                     }
                 }
                 if ev.keystroke.key == "escape" && (this.context.is_some() || this.picker.is_some()) {
-                    this.context = None;
+                    this.close_context(cx);
                     this.picker = None;
                     cx.stop_propagation();
                     cx.notify();

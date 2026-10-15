@@ -27,9 +27,17 @@ const DESK_H: f32 = 34.;
 pub(super) struct ContextMenu {
     pub item: Item,
     pub at: Point<Pixels>,
-    /// Where the card sat in the grid, to lift it from.
+    /// Where the card sat in the grid, to lift it from (and back to).
     pub origin: Option<Bounds<Pixels>>,
+    /// Unique per opening, so a close can't remove a newer card.
+    pub id: u64,
+    /// Settling back into the grid; removed when that finishes.
+    pub closing: bool,
 }
+
+/// How long the card takes to lift, and to settle back.
+const OPEN_MS: u64 = 220;
+const CLOSE_MS: u64 = 180;
 
 #[derive(Clone)]
 enum Action {
@@ -53,16 +61,30 @@ impl Muralist {
         self.picker = None;
         self.context_hover = None;
         self.context_galleries = false;
-        self.context = Some(ContextMenu { item, at, origin });
+        self.context_seq += 1;
+        self.context = Some(ContextMenu { item, at, origin, id: self.context_seq, closing: false });
         cx.notify();
     }
 
+    /// Settles the card back into its spot, then removes it.
     pub(super) fn close_context(&mut self, cx: &mut Context<Self>) {
-        if self.context.take().is_some() {
-            self.context_hover = None;
-            self.context_galleries = false;
-            cx.notify();
-        }
+        let Some(menu) = self.context.as_mut().filter(|m| !m.closing) else { return };
+        menu.closing = true;
+        let id = menu.id;
+        self.context_hover = None;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(std::time::Duration::from_millis(CLOSE_MS)).await;
+            this.update(cx, |this, cx| {
+                if this.context.as_ref().is_some_and(|m| m.id == id) {
+                    this.context = None;
+                    this.context_galleries = false;
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn run_context(&mut self, action: Action, window: &mut Window, cx: &mut Context<Self>) {
@@ -71,10 +93,8 @@ impl Muralist {
             cx.notify();
             return;
         }
-        let Some(menu) = self.context.take() else { return };
-        self.context_hover = None;
-        self.context_galleries = false;
-        let item = menu.item;
+        let Some(item) = self.context.as_ref().filter(|m| !m.closing).map(|m| m.item.clone()) else { return };
+        self.close_context(cx);
         let targets = self.target.targets();
         match action {
             Action::SetAll => self.assign_item_then(item, targets, Placement::All, true, cx),
@@ -99,7 +119,7 @@ impl Muralist {
 
     /// Shortcut keys while the card is open. Returns whether it was used.
     pub(super) fn context_key(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let Some(menu) = &self.context else { return false };
+        let Some(menu) = self.context.as_ref().filter(|m| !m.closing) else { return false };
         let remote_id = match &menu.item {
             Item::Remote(w) => Some(w.id.clone()),
             Item::Local(_) => None,
@@ -131,7 +151,7 @@ impl Muralist {
     pub(super) fn render_context(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let p = pal();
         let menu = self.context.as_ref()?;
-        let (item, at, origin) = (menu.item.clone(), menu.at, menu.origin);
+        let (item, at, origin, open_id, closing) = (menu.item.clone(), menu.at, menu.origin, menu.id, menu.closing);
         let colors = gridmodes::item_colors(&item, &self.local_palettes);
         let c = glass::glow_color(&colors).unwrap_or(p.accent);
         let thumb = match &item {
@@ -397,13 +417,25 @@ impl Muralist {
             // Its edge in its own color, on top.
             .child(div().absolute().inset_0().rounded(px(R)).border_1().border_color(with_alpha(c, 0.7)))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            // Grow out of the card's own spot in the grid.
+            // Grow out of the card's own spot in the grid, and settle back
+            // into it on close.
             .with_animation(
-                SharedString::from(format!("context-lift-{key}")),
-                Animation::new(std::time::Duration::from_millis(220)).with_easing(ease_out_quint()),
+                SharedString::from(format!("context-{}-{key}-{open_id}", if closing { "settle" } else { "lift" })),
+                Animation::new(std::time::Duration::from_millis(if closing { CLOSE_MS } else { OPEN_MS })).with_easing(
+                    {
+                        let quint = ease_out_quint();
+                        move |t| if closing { ease_in_out(t) } else { quint(t) }
+                    },
+                ),
                 move |d, t| {
+                    let t = if closing { 1. - t } else { t };
                     let lerp = |a: f32, b: f32| a + (b - a) * t;
-                    d.left(px(lerp(fx, tx))).top(px(lerp(fy, ty))).w(px(lerp(fw, w))).h(px(lerp(fh, h)))
+                    d.left(px(lerp(fx, tx)))
+                        .top(px(lerp(fy, ty)))
+                        .w(px(lerp(fw, w)))
+                        .h(px(lerp(fh, h)))
+                        // The menu fades as it lands, leaving the card itself.
+                        .when(closing, |d| d.opacity(0.35 + 0.65 * t))
                 },
             );
 
@@ -414,9 +446,9 @@ impl Muralist {
             .h(px(vh))
             .occlude()
             .child(div().absolute().inset_0().bg(hsla(0., 0., 0., 0.45)).with_animation(
-                SharedString::from(format!("context-dim-{key}")),
-                Animation::new(std::time::Duration::from_millis(220)),
-                |d, t| d.opacity(t),
+                SharedString::from(format!("context-dim-{}-{key}-{open_id}", if closing { "out" } else { "in" })),
+                Animation::new(std::time::Duration::from_millis(if closing { CLOSE_MS } else { OPEN_MS })),
+                move |d, t| d.opacity(if closing { 1. - t } else { t }),
             ))
             .child(card)
             .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| this.close_context(cx)))
