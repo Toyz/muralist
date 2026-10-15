@@ -41,16 +41,24 @@ impl Muralist {
             return None;
         }
         let p = pal();
-        let item = self.selected.clone()?;
+        let selected = self.selected.clone()?;
         let tab = self.inspector_tab;
-        let remote = matches!(item, Item::Remote(_));
 
         // The picture: the full original once it's here, the large thumbnail
-        // until then.
-        let picture = match &item {
+        // until then; a saved file shows itself.
+        let picture = match &selected {
             Item::Remote(w) => self.remote_full(w, cx).or_else(|| self.remote_thumb(w, true)),
             Item::Local(path) => Some(path.clone()),
         };
+        // A saved file whose origin is known reads as that Wallhaven
+        // wallpaper: purity, tags, similar and all.
+        let item = match &selected {
+            Item::Local(path) => {
+                self.provenance.of(path).map(|r| Item::Remote(r.wallpaper.clone())).unwrap_or(selected.clone())
+            }
+            Item::Remote(_) => selected.clone(),
+        };
+        let remote = matches!(item, Item::Remote(_));
         let (title, facts): (String, Vec<AnyElement>) = match &item {
             Item::Remote(w) => {
                 let pc = purity_color(&w.purity);

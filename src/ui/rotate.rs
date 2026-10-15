@@ -145,7 +145,11 @@ impl Job {
         let path = entry.original(&self.download_dir);
         match entry {
             Entry::Wallhaven(w) if !path.is_file() => {
-                self.client.download_parallel(&w.path, &path, &Default::default())
+                let path = self.client.download_parallel(&w.path, &path, &Default::default())?;
+                if let Err(e) = crate::provenance::remember(w) {
+                    eprintln!("recording provenance: {e:#}");
+                }
+                Ok(path)
             }
             Entry::Local(p) if !p.is_file() => bail!("{} is missing", p.display()),
             _ => Ok(path),
@@ -164,7 +168,12 @@ impl Job {
             bail!("no results to rotate through");
         }
         let download = |w: &Wallpaper| -> Result<PathBuf> {
-            self.client.download_parallel(&w.path, &self.download_dir.join(w.file_name()), &Default::default())
+            let path =
+                self.client.download_parallel(&w.path, &self.download_dir.join(w.file_name()), &Default::default())?;
+            if let Err(e) = crate::provenance::remember(w) {
+                eprintln!("recording provenance: {e:#}");
+            }
+            Ok(path)
         };
 
         // Sometimes: one ultrawide across everything.

@@ -959,6 +959,8 @@ pub struct Muralist {
     library: Vec<PathBuf>,
     tab: Tab,
     galleries: Galleries,
+    /// What each saved wallpaper is (see `crate::provenance`).
+    provenance: crate::provenance::Provenance,
     /// The gallery the Galleries tab shows.
     gallery: Option<u64>,
     gallery_work: HashMap<u64, galleries::GalleryWork>,
@@ -1197,6 +1199,7 @@ impl Muralist {
             library: Vec::new(),
             tab: Tab::Discover,
             galleries: Galleries::load(),
+            provenance: crate::provenance::Provenance::load(),
             gallery: None,
             gallery_work: HashMap::new(),
             import: None,
@@ -1284,6 +1287,7 @@ impl Muralist {
         this.start_rotation_clock(cx);
         this.start_cache_janitor(cx);
         this.resume_galleries(cx);
+        this.backfill_provenance(cx);
         if this.client.has_key() {
             this.load_account(cx);
         } else {
@@ -1798,6 +1802,7 @@ impl Muralist {
     }
 
     fn refresh_library(&mut self) {
+        self.provenance = crate::provenance::Provenance::load();
         let mut files: Vec<(std::time::SystemTime, PathBuf)> = std::fs::read_dir(&self.cfg.download_dir)
             .into_iter()
             .flatten()
@@ -1956,12 +1961,18 @@ impl Muralist {
             Item::Remote(w) => {
                 let dest = dir.join(w.file_name());
                 let cached = remote_cache_path(&full_key(&w), &w.path);
-                if !dest.exists() && cached.is_file() {
+                let saved = if !dest.exists() && cached.is_file() {
                     std::fs::create_dir_all(dir)?;
                     std::fs::copy(&cached, &dest)?;
-                    return Ok(dest);
+                    dest
+                } else {
+                    client.download_parallel(&w.path, &dest, &Progress::default())?
+                };
+                // Remember what it is, so the Library and History know later.
+                if let Err(e) = crate::provenance::remember(&w) {
+                    eprintln!("recording provenance: {e:#}");
                 }
-                client.download_parallel(&w.path, &dest, &Progress::default())
+                Ok(saved)
             }
             Item::Local(p) => Ok(p),
         }
@@ -2888,7 +2899,8 @@ impl Muralist {
         };
         let purity: Option<String> = match &item {
             Item::Remote(wp) => Some(wp.purity.clone()),
-            Item::Local(_) => None,
+            // Saved files keep the purity they were downloaded with.
+            Item::Local(path) => self.provenance.of(path).map(|r| r.wallpaper.purity.clone()),
         };
         // Placeholder in the wallpaper's own dominant color, dimmed.
         let placeholder_bg = match &item {
@@ -3840,6 +3852,45 @@ impl Muralist {
                 cx.notify();
             })
             .ok();
+        })
+        .detach();
+    }
+
+    /// Looks up what library files are, for ones saved before muralist
+    /// kept track: their names carry the Wallhaven ID. Throttled well under
+    /// the API's 45 requests a minute, and capped per session.
+    fn backfill_provenance(&mut self, cx: &mut Context<Self>) {
+        let mut ids: Vec<String> = self
+            .library
+            .iter()
+            .filter(|p| self.provenance.of(p).is_none())
+            .filter_map(|p| crate::provenance::wallhaven_id(p))
+            .collect();
+        ids.sort();
+        ids.dedup();
+        ids.truncate(120);
+        if ids.is_empty() {
+            return;
+        }
+        let client = self.client.clone();
+        cx.spawn(async move |this, cx| {
+            let mut found = 0;
+            for id in ids {
+                let client = client.clone();
+                let got = cx
+                    .background_executor()
+                    .spawn(async move { client.wallpaper(&id).and_then(|w| crate::provenance::remember(&w)) })
+                    .await;
+                found += usize::from(got.is_ok());
+                cx.background_executor().timer(std::time::Duration::from_millis(1500)).await;
+            }
+            if found > 0 {
+                this.update(cx, |this, cx| {
+                    this.provenance = crate::provenance::Provenance::load();
+                    cx.notify();
+                })
+                .ok();
+            }
         })
         .detach();
     }

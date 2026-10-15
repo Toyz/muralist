@@ -9,7 +9,9 @@ use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::{BtnKind, GRID_PAD, Muralist, Target, TargetMode, icon, pal, radius, section, small_button, with_alpha};
+use super::{
+    BtnKind, GRID_PAD, Muralist, Target, TargetMode, boxed, icon, pal, radius, section, small_button, with_alpha,
+};
 use crate::config::HistoryEntry;
 
 const MINI_W: f32 = 300.;
@@ -171,6 +173,9 @@ impl Muralist {
             .map(|m| {
                 let path = images.get(&m.name).filter(|p| p.is_file()).cloned();
                 let thumb = path.as_deref().and_then(|p| self.local_thumb(p));
+                // What it was when it was saved, even if it's only a span slice now.
+                let purity = path.as_deref().and_then(|p| self.provenance.of(p)).map(|r| r.wallpaper.purity.clone());
+                let (tw, th) = (m.width as f32 * scale - gap, m.height as f32 * scale - gap);
                 div()
                     .absolute()
                     .left(px((m.x - min_x) as f32 * scale + gap / 2.))
@@ -181,9 +186,12 @@ impl Muralist {
                     .overflow_hidden()
                     .bg(p.bg)
                     .border_1()
-                    .border_color(p.border)
+                    .border_color(match purity.as_deref() {
+                        Some(pu) => with_alpha(super::purity_color(pu), 0.75),
+                        None => p.border,
+                    })
                     .map(|d| match thumb {
-                        Some(t) => d.child(radius(img(t).size_full().object_fit(ObjectFit::Cover), 5.)),
+                        Some(t) => d.child(radius(boxed(img(t), tw - 2., th - 2.).object_fit(ObjectFit::Cover), 5.)),
                         None if images.contains_key(&m.name) => d.child(
                             div()
                                 .size_full()

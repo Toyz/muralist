@@ -317,7 +317,11 @@ impl Muralist {
                 .on_click(cx.listener(move |this, _, window, cx| this.open_sheet(t, window, cx)))
         };
         let toggles = selected.as_ref().map(|item| {
-            let remote = matches!(item, Item::Remote(_));
+            // Saved files with a known origin have Similar too.
+            let remote = match item {
+                Item::Remote(_) => true,
+                Item::Local(path) => self.provenance.of(path).is_some(),
+            };
             h_flex().gap_1p5().child(more_toggle("more-info", "Info".into(), "info", InspectorTab::Info)).when(
                 remote,
                 |d| {

@@ -2,6 +2,7 @@ mod backend;
 mod config;
 mod gallery;
 mod monitors;
+mod provenance;
 mod span;
 mod thumbs;
 mod ui;

@@ -169,6 +169,11 @@ struct TagResponse {
 }
 
 #[derive(Deserialize)]
+struct WallpaperResponse {
+    data: Wallpaper,
+}
+
+#[derive(Deserialize)]
 struct InfoResponse {
     data: WallpaperInfo,
 }
@@ -364,6 +369,17 @@ impl Client {
             s => bail!("HTTP {s}"),
         }
         Ok(resp.json::<InfoResponse>()?.data)
+    }
+
+    /// A single wallpaper's record by ID (purity, category, colors...).
+    pub fn wallpaper(&self, id: &str) -> Result<Wallpaper> {
+        let resp = self.get(&format!("{BASE}/w/{id}")).send()?;
+        match resp.status().as_u16() {
+            200 => {}
+            429 => bail!("rate limited, try again in a moment"),
+            s => bail!("HTTP {s}"),
+        }
+        Ok(resp.json::<WallpaperResponse>()?.data)
     }
 
     /// The account's collections. Needs an API key.

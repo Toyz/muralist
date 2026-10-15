@@ -221,6 +221,8 @@ precedence over the file.
 
 - `~/.config/muralist/state.json`: what is on each monitor, plus history.
 - `~/.config/muralist/galleries.json`: your galleries.
+- `~/.config/muralist/provenance.json`: what each saved wallpaper is (its
+  Wallhaven purity, category, colors), so the Library and History keep it.
 - `~/.cache/muralist/`: thumbnails, cached originals and span slices, kept
   under a size limit you choose in Settings.
 - `MURALIST_BACKEND` forces a backend by ID (`plasma`, `windows`, `macos`).
