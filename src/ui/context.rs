@@ -61,6 +61,11 @@ impl Muralist {
         self.picker = None;
         self.context_hover = None;
         self.context_galleries = false;
+        // Right-click is intent: start fetching the original right away.
+        if let Item::Remote(w) = &item {
+            let w = w.clone();
+            self.remote_full(&w, cx);
+        }
         self.context_seq += 1;
         self.context = Some(ContextMenu { item, at, origin, id: self.context_seq, closing: false });
         cx.notify();
@@ -115,6 +120,39 @@ impl Muralist {
             Action::Galleries => {}
         }
         cx.notify();
+    }
+
+    /// A sharp copy of the original, just big enough to cover a `w` x `h`
+    /// card at this display scale (in 64px steps, so resizes are shared).
+    /// Starts the download if it hasn't begun; None until it's here.
+    fn context_sharp(&mut self, item: &Item, w: f32, h: f32, cx: &mut Context<Self>) -> Option<std::path::PathBuf> {
+        let (src, iw, ih) = match item {
+            Item::Remote(wp) => {
+                let full = self.remote_full(wp, cx)?;
+                let (a, b) = wp.resolution.split_once('x')?;
+                (full, a.parse::<f32>().ok()?, b.parse::<f32>().ok()?)
+            }
+            Item::Local(path) => {
+                let (iw, ih) = image::image_dimensions(path).ok()?;
+                (path.clone(), iw as f32, ih as f32)
+            }
+        };
+        let k = (w / iw.max(1.)).max(h / ih.max(1.)) * self.scale;
+        let step = |v: f32| ((v / 64.).ceil() * 64.) as u32;
+        self.fitted(&src, step(iw * k), step(ih * k))
+    }
+
+    /// How far the original's download has got, while it's running.
+    fn context_fetch(&self, item: &Item) -> Option<f32> {
+        let Item::Remote(w) = item else { return None };
+        match self.full.get(&w.id) {
+            Some(super::FullState::Loading { progress }) => {
+                let done = progress.done.load(std::sync::atomic::Ordering::Relaxed);
+                let total = progress.total.load(std::sync::atomic::Ordering::Relaxed);
+                Some(if total > 0 { (done as f32 / total as f32).clamp(0., 1.) } else { 0. })
+            }
+            _ => None,
+        }
     }
 
     /// Shortcut keys while the card is open. Returns whether it was used.
@@ -189,6 +227,10 @@ impl Muralist {
         let (cx_, cy_) = (fx + fw / 2., fy + fh / 2.);
         let tx = (cx_ - w / 2.).clamp(16., (vw - w - 16.).max(16.));
         let ty = (cy_ - h / 2.).clamp(16., (vh - h - 16.).max(16.));
+
+        // The original, sharpened in when it lands; progress until then.
+        let sharp = self.context_sharp(&item, w, h, cx);
+        let fetching = self.context_fetch(&item);
 
         // ---- the screens, along the top of the image ----
         let desk = can_set.then(|| {
@@ -357,6 +399,7 @@ impl Muralist {
             Item::Local(path) => (file_name(path), Vec::new()),
         };
         let glass = v_flex()
+            .relative()
             .gap_2p5()
             .p_3()
             .map(|d| super::radius_bottom(d, R))
@@ -367,6 +410,10 @@ impl Muralist {
             ))
             .border_t_1()
             .border_color(with_alpha(c, 0.45))
+            // The original downloading, as a line along the glass's top edge.
+            .when_some(fetching, |d, f| {
+                d.child(div().absolute().top(px(-1.)).left_0().h(px(2.)).w(relative(f.max(0.02))).bg(c))
+            })
             .child(
                 h_flex()
                     .gap_2()
@@ -411,6 +458,13 @@ impl Muralist {
             .child(div().absolute().inset_0().when_some(thumb, |d, t| {
                 d.child(radius(box_ratio(img(t).size_full(), w, h).object_fit(ObjectFit::Cover), R))
             }))
+            // The sharp copy fades in over the thumbnail once it's ready.
+            .when_some(sharp, |d, s| {
+                d.child(super::fade_in(
+                    SharedString::from(format!("context-sharp-{key}")),
+                    radius(box_ratio(img(s).size_full(), w, h).object_fit(ObjectFit::Cover), R),
+                ))
+            })
             .child(h_flex().relative().p_2p5().children(desk))
             .child(div().flex_1())
             .child(div().relative().child(glass))
