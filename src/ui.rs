@@ -63,6 +63,8 @@ const SIDE_CARD_PAD: f32 = 12.;
 const INSPECTOR_PAD: f32 = 20.;
 /// Preview height when nothing (or nothing measurable) is selected.
 const PREVIEW_H: f32 = 236.;
+/// Image palettes decoded per frame at most (each is a small image decode).
+const PALETTES_PER_FRAME: u8 = 2;
 
 /// Preview box height that matches an image's shape: short for ultrawides,
 /// tall for portraits, clamped so it never takes over the sidebar.
@@ -1042,6 +1044,10 @@ pub struct Muralist {
     local_dims: HashMap<PathBuf, Option<(u32, u32)>>,
     /// Card under the pointer and where on it (0..1), for the holo glare.
     holo: Option<(usize, f32, f32)>,
+    /// The selection's palette, keyed by what was selected.
+    selected_palette: Option<(String, Rc<[Hsla]>)>,
+    /// Palettes still allowed to be decoded this frame.
+    palette_budget: u8,
     peek: Option<peek::Peek>,
     /// Focus of the main view, so Space reaches it when no field is focused.
     main_focus: FocusHandle,
@@ -1299,6 +1305,8 @@ impl Muralist {
             justified_h: 200.,
             justified_key: 0,
             local_dims: HashMap::new(),
+            selected_palette: None,
+            palette_budget: PALETTES_PER_FRAME,
             holo: None,
             peek: None,
             main_focus,
@@ -1669,23 +1677,45 @@ impl Muralist {
     }
 
     /// Dominant-first colors of the selection, for the adaptive theme.
-    fn selected_colors(&mut self) -> Vec<Hsla> {
-        match self.selected.clone() {
-            Some(Item::Remote(w)) => w.colors.iter().filter_map(|c| parse_hex(c)).collect(),
-            Some(Item::Local(path)) => {
-                if let Some(colors) = self.local_palettes.get(&path) {
-                    return colors.clone();
-                }
-                // Computed from the small thumbnail once it exists.
-                let Some(thumb) = self.local_thumb(&path) else {
-                    return Vec::new();
-                };
-                let colors = adaptive::image_palette(&thumb);
-                self.local_palettes.insert(path, colors.clone());
-                colors
-            }
-            None => Vec::new(),
+    /// Asked for several times a frame, so kept until the selection changes.
+    fn selected_colors(&mut self) -> Rc<[Hsla]> {
+        let key = match &self.selected {
+            Some(Item::Remote(w)) => w.id.as_str().into(),
+            Some(Item::Local(path)) => path.to_string_lossy(),
+            None => return Rc::from([]),
+        };
+        if let Some((k, colors)) = &self.selected_palette
+            && *k == key
+        {
+            return colors.clone();
         }
+        let key = key.into_owned();
+        let colors: Rc<[Hsla]> = match self.selected.clone() {
+            Some(Item::Remote(w)) => w.colors.iter().filter_map(|c| parse_hex(c)).collect(),
+            Some(Item::Local(path)) => match self.local_palette(&path) {
+                Some(colors) => colors.into(),
+                // Not worked out yet: ask again next frame.
+                None => return Rc::from([]),
+            },
+            None => return Rc::from([]),
+        };
+        self.selected_palette = Some((key, colors.clone()));
+        colors
+    }
+
+    /// A saved file's palette, from its thumbnail. Working one out decodes
+    /// an image, so only a couple are done a frame; the rest wait a frame.
+    fn local_palette(&mut self, path: &Path) -> Option<&[Hsla]> {
+        if !self.local_palettes.contains_key(path) {
+            if self.palette_budget == 0 {
+                return None;
+            }
+            let thumb = self.local_thumb(path)?;
+            self.palette_budget -= 1;
+            let colors = adaptive::image_palette(&thumb);
+            self.local_palettes.insert(path.to_owned(), colors);
+        }
+        self.local_palettes.get(path).map(Vec::as_slice)
     }
 
     fn current_items(&self) -> Vec<Item> {
@@ -1756,14 +1786,16 @@ impl Muralist {
 
     /// The full-resolution original, downloaded to the cache on demand.
     fn remote_full(&mut self, w: &Wallpaper, cx: &mut Context<Self>) -> Option<PathBuf> {
-        let saved = self.cfg.download_dir.join(w.file_name());
-        if saved.is_file() {
-            return Some(saved);
-        }
+        // Known already: this runs every frame, so no disk checks then.
         match self.full.get(&w.id) {
             Some(FullState::Ready(path)) => return Some(path.clone()),
             Some(_) => return None,
             None => {}
+        }
+        let saved = self.cfg.download_dir.join(w.file_name());
+        if saved.is_file() {
+            self.full.insert(w.id.clone(), FullState::Ready(saved.clone()));
+            return Some(saved);
         }
         let cached = remote_cache_path(&full_key(w), &w.path);
         if let Some(cached) = crate::thumbs::reuse(&cached) {
@@ -3030,11 +3062,8 @@ impl Muralist {
         let hovered = holo.is_some();
         // Palette for the hover effects; local images get theirs on first hover.
         let colors = if hovered {
-            if let Item::Local(path) = &item
-                && !self.local_palettes.contains_key(path)
-                && let Some(thumb) = self.local_thumb(path)
-            {
-                self.local_palettes.insert(path.clone(), adaptive::image_palette(&thumb));
+            if let Item::Local(path) = &item {
+                self.local_palette(path);
             }
             gridmodes::item_colors(&item, &self.local_palettes)
         } else {
@@ -4429,6 +4458,7 @@ impl Muralist {
 
 impl Render for Muralist {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.palette_budget = PALETTES_PER_FRAME;
         let target =
             if self.cfg.adaptive_theme { adaptive::derive(&self.selected_colors()) } else { adaptive::base_pal() };
         let (now_pal, animating) = self.theme_anim.step(target);

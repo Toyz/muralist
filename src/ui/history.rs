@@ -69,13 +69,25 @@ fn stays(history: &[HistoryEntry]) -> HashMap<usize, i64> {
 impl Muralist {
     /// An entry's own color: the vivid tone of its first image.
     fn entry_color(&mut self, e: &HistoryEntry) -> Option<Hsla> {
-        let path = e.images.values().find(|p| p.is_file())?.clone();
-        self.path_glow(&path)
+        // A missing file just never gets a thumbnail, so no disk checks here.
+        e.images.values().find_map(|path| self.path_glow(path))
+    }
+
+    /// Runs with the history lent out of `applied` (rendering never reads
+    /// it from there), so the frame doesn't clone hundreds of entries.
+    fn with_history<R>(&mut self, f: impl FnOnce(&mut Self, &[HistoryEntry]) -> R) -> R {
+        let history = std::mem::take(&mut self.applied.history);
+        let out = f(self, &history);
+        self.applied.history = history;
+        out
     }
 
     pub(super) fn render_history(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        self.with_history(|this, history| this.render_history_of(history, cx))
+    }
+
+    fn render_history_of(&mut self, history: &[HistoryEntry], cx: &mut Context<Self>) -> AnyElement {
         let p = pal();
-        let history = self.applied.history.clone();
         if history.is_empty() {
             return v_flex()
                 .flex_1()
@@ -368,7 +380,7 @@ impl Muralist {
         let screens: Vec<Div> = monitors
             .iter()
             .map(|m| {
-                let path = images.get(&m.name).filter(|p| p.is_file()).cloned();
+                let path = images.get(&m.name).cloned();
                 let thumb = path.as_deref().and_then(|p| self.local_thumb(p));
                 // What it was when it was saved, even if it's only a span slice now.
                 let purity = path.as_deref().and_then(|p| self.provenance.of(p)).map(|r| r.wallpaper.purity.clone());
@@ -411,14 +423,17 @@ impl Muralist {
 
     /// The History tab's sidebar: the color calendar and the stats.
     pub(super) fn render_history_side(&mut self, cx: &mut Context<Self>) -> Div {
+        self.with_history(|this, history| this.render_history_side_of(history, cx))
+    }
+
+    fn render_history_side_of(&mut self, history: &[HistoryEntry], cx: &mut Context<Self>) -> Div {
         let p = pal();
-        let history = self.applied.history.clone();
         let today = Local::now().date_naive();
         let (year, month) = self.history_month.unwrap_or((today.year(), today.month()));
 
         // Each day's color is that of the last set put up that day.
         let mut by_day: BTreeMap<NaiveDate, (usize, Option<Hsla>)> = BTreeMap::new();
-        for e in &history {
+        for e in history {
             let Some(day) = local_date(e.at) else { continue };
             let c = self.entry_color(e);
             let slot = by_day.entry(day).or_insert((0, None));
@@ -517,10 +532,8 @@ impl Muralist {
         let locks = history.iter().filter(|e| e.target == "lock").count();
         let stays = stays(&history);
         let longest = stays.iter().max_by_key(|(_, s)| **s).map(|(ix, s)| (*ix, *s));
-        let longest_thumb = longest.and_then(|(ix, _)| {
-            let path = history[ix].images.values().find(|p| p.is_file())?.clone();
-            self.local_thumb(&path)
-        });
+        let longest_thumb =
+            longest.and_then(|(ix, _)| history[ix].images.values().find_map(|path| self.local_thumb(path)));
         let mut worn: Vec<Hsla> = history.iter().rev().filter_map(|e| self.entry_color(e)).collect();
         worn.dedup_by(|a, b| (a.h - b.h).abs() < 0.03 && (a.l - b.l).abs() < 0.08);
         let stat = |label: &str, value: String| {

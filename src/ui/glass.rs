@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use gpui_kit::*;
 
-use super::{Item, Muralist, Pal, adaptive, fade_in, local_key, with_alpha};
+use super::{Item, Muralist, Pal, fade_in, local_key, with_alpha};
 use crate::thumbs::Job;
 
 /// Most vivid color of a palette, lifted into a glow.
@@ -99,10 +99,6 @@ impl Muralist {
 
     /// Glow color for an image on disk, from its thumbnail's palette.
     pub(super) fn path_glow(&mut self, path: &Path) -> Option<Hsla> {
-        if !self.local_palettes.contains_key(path) {
-            let thumb = self.local_thumb(path)?;
-            self.local_palettes.insert(path.to_owned(), adaptive::image_palette(&thumb));
-        }
-        glow_color(self.local_palettes.get(path)?)
+        glow_color(self.local_palette(path)?)
     }
 }
