@@ -939,6 +939,8 @@ pub struct Muralist {
     last_rotation: Instant,
     history_hover: Option<usize>,
     slot: Option<slot::Slot>,
+    /// Spun wallpapers still downloading, by monitor.
+    landing: Vec<(String, Wallpaper)>,
     /// Mosaic rows: per row, (item index, card width).
     justified: Vec<Vec<(usize, f32)>>,
     justified_h: f32,
@@ -1156,6 +1158,7 @@ impl Muralist {
             last_rotation: Instant::now(),
             history_hover: None,
             slot: None,
+            landing: Vec::new(),
             justified: Vec::new(),
             justified_h: 200.,
             local_dims: HashMap::new(),
@@ -1935,6 +1938,10 @@ impl Muralist {
             Placement::Span => "Downloading and slicing across displays...",
             _ => "Downloading...",
         };
+        let landed = match &placement {
+            Placement::Monitor(name) => Some(name.clone()),
+            _ => None,
+        };
         self.set_status(msg, false, cx);
 
         cx.spawn(async move |this, cx| {
@@ -1952,6 +1959,9 @@ impl Muralist {
                 .await;
             this.update(cx, |this, cx| {
                 this.busy -= 1;
+                if let Some(name) = &landed {
+                    this.landing.retain(|(m, _)| m != name);
+                }
                 match result {
                     Ok(map) => {
                         for t in &targets {
@@ -3894,9 +3904,14 @@ impl Muralist {
         }
         let cols = tiles.len() as u16;
 
+        let fetching = self.landing.len();
         let apply = (changes > 0 || busy).then(|| {
             kit::Btn::new("apply")
-                .label(format!("Apply {changes} change{}", if changes == 1 { "" } else { "s" }))
+                .label(if fetching > 0 {
+                    format!("Fetching {fetching} wallpaper{}", if fetching == 1 { "" } else { "s" })
+                } else {
+                    format!("Apply {changes} change{}", if changes == 1 { "" } else { "s" })
+                })
                 .icon("check")
                 .primary()
                 .lg()

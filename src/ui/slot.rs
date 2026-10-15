@@ -97,6 +97,14 @@ pub(super) fn palette(w: &Wallpaper) -> Vec<[f32; 3]> {
     w.colors.iter().filter_map(|c| parse_hex(c)).map(lab).collect()
 }
 
+/// Every reel has stopped and the result has lingered long enough to read.
+/// Measured from when the last reel stopped, never from `now`, or the
+/// linger would keep moving and the spin would never end.
+fn spin_done(reels: &[Reel], now: Instant) -> bool {
+    let Some(last_stop) = reels.iter().map(|r| r.stop_at).max() else { return true };
+    reels.iter().all(|r| r.stopped) && now >= last_stop + LINGER
+}
+
 impl Muralist {
     /// Monitors left to right, primary first when choosing who gets the anchor.
     fn monitor_order(&self) -> Vec<String> {
@@ -188,7 +196,6 @@ impl Muralist {
                         };
                         let now = Instant::now();
                         let pool_len = slot.pool.len().max(1) as u64;
-                        let mut last_stop = now;
                         for i in 0..slot.reels.len() {
                             let pick = (slot.next() % pool_len) as usize;
                             let reel = &mut slot.reels[i];
@@ -199,11 +206,9 @@ impl Muralist {
                                     reel.showing = pick;
                                 }
                             }
-                            last_stop = last_stop.max(reel.stop_at);
                         }
                         cx.notify();
-                        let all_stopped = slot.reels.iter().all(|r| r.stopped);
-                        if all_stopped && now >= last_stop + LINGER {
+                        if spin_done(&slot.reels, now) {
                             this.finish_reels(cx);
                             return true;
                         }
@@ -223,6 +228,8 @@ impl Muralist {
             return;
         };
         let count = slot.reels.len();
+        // The faces stay up while the originals download.
+        self.landing = slot.reels.iter().map(|r| (r.monitor.clone(), r.outcome.clone())).collect();
         for reel in slot.reels {
             self.assign_item(Item::Remote(reel.outcome), slot.targets.clone(), Placement::Monitor(reel.monitor), cx);
         }
@@ -231,7 +238,9 @@ impl Muralist {
 
     /// What a spinning (or freshly stopped) reel shows on `monitor`.
     pub(super) fn reel_face(&self, monitor: &str) -> Option<(Wallpaper, bool)> {
-        let slot = self.slot.as_ref()?;
+        let Some(slot) = self.slot.as_ref() else {
+            return self.landing.iter().find(|(m, _)| m == monitor).map(|(_, w)| (w.clone(), true));
+        };
         let reel = slot.reels.iter().find(|r| r.monitor == monitor)?;
         if reel.stopped {
             Some((reel.outcome.clone(), true))
@@ -243,7 +252,37 @@ impl Muralist {
 
 #[cfg(test)]
 mod tests {
-    use super::{lab, palette_distance};
+    use super::{FIRST_STOP, LINGER, Reel, lab, palette_distance, spin_done};
+    use crate::wallhaven::{Thumbs, Wallpaper};
+    use std::time::Instant;
+
+    fn reel(stop_at: Instant, stopped: bool) -> Reel {
+        let outcome = Wallpaper {
+            id: "x".into(),
+            url: String::new(),
+            purity: "sfw".into(),
+            category: "general".into(),
+            resolution: "1920x1080".into(),
+            file_size: 0,
+            favorites: 0,
+            path: String::new(),
+            thumbs: Thumbs { original: String::new(), small: String::new() },
+            colors: Vec::new(),
+        };
+        Reel { monitor: "DP-1".into(), outcome, stop_at, showing: 0, stopped }
+    }
+
+    #[test]
+    fn spin_finishes_after_the_linger() {
+        let start = Instant::now();
+        let stop = start + FIRST_STOP;
+        // Still spinning.
+        assert!(!spin_done(&[reel(stop, false)], start));
+        // Stopped, but not lingered yet.
+        assert!(!spin_done(&[reel(stop, true)], stop));
+        // Stopped long ago: done (this used to hang forever).
+        assert!(spin_done(&[reel(stop, true)], stop + LINGER * 3));
+    }
     use gpui_kit::hsla;
 
     #[test]
