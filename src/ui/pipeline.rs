@@ -468,10 +468,45 @@ impl Muralist {
                     .into_any_element()
             })
             .collect();
-        let layouts = if stacked {
-            v_flex().items_center().gap_2().children(layouts)
+        // Copying between surfaces sits with the rows it moves pictures
+        // between: arrows between them in Both, a link under the row
+        // otherwise. It goes into the plan, like any other arrangement.
+        let copy_btn = |id: &'static str, icon_name: &'static str, label: &'static str, from: Target| {
+            let has = !match from {
+                Target::Desktop => &self.applied.desktop,
+                Target::Lock => &self.applied.lock,
+            }
+            .is_empty();
+            kit::Btn::new(id).icon(icon_name).label(label).ghost().sm().disabled(!has).on_click(cx.listener(
+                move |this, _, _, cx| {
+                    match from {
+                        Target::Desktop => this.lock = this.applied.desktop.clone(),
+                        Target::Lock => this.desktop = this.applied.lock.clone(),
+                    }
+                    cx.notify();
+                },
+            ))
+        };
+        let copies = lock_reach.is_some().then(|| match mode {
+            TargetMode::Both => h_flex()
+                .justify_center()
+                .gap_1()
+                .child(copy_btn("copy-down", "arrow-down", "Desktop to lock", Target::Desktop))
+                .child(copy_btn("copy-up", "arrow-up", "Lock to desktop", Target::Lock)),
+            TargetMode::Desktop => {
+                h_flex().justify_end().child(copy_btn("copy-up", "lock", "Use the lock screen's", Target::Lock))
+            }
+            TargetMode::Lock => {
+                h_flex().justify_end().child(copy_btn("copy-down", "monitor", "Use the desktop's", Target::Desktop))
+            }
+        });
+        let layouts = if stacked && layouts.len() == 2 {
+            let mut rows = layouts.into_iter();
+            v_flex().items_center().gap_1().children(rows.next()).children(copies).children(rows.next())
+        } else if stacked {
+            v_flex().items_center().gap_2().children(layouts).children(copies)
         } else {
-            h_flex().justify_center().gap_3().children(layouts)
+            v_flex().gap_1().child(h_flex().justify_center().gap_3().children(layouts)).children(copies)
         };
 
         let tile = |id: &'static str, name: &'static str, label: &'static str, tip: &'static str, enabled: bool| {
@@ -501,70 +536,34 @@ impl Muralist {
                     }
                 })
         };
-        let mut tiles = vec![
-            tile(
-                "fill-all",
-                "layout-dashboard",
-                "Every screen",
-                "Put the selected wallpaper on every screen, framing each as you like",
-                has_selection,
-            )
-            .when(has_selection, |d| {
-                d.on_click(cx.listener(|this, _, _, cx| {
-                    this.open_composer(ComposeMode::Every, None, super::span_editor::ComposeExit::Plan, cx)
-                }))
-            })
-            .into_any_element(),
-            tile("span", "frame", "Span", "One picture across every screen", has_selection)
+        // What to do with the selection; nothing to show without one.
+        let tiles = if !has_selection {
+            Vec::new()
+        } else {
+            vec![
+                tile(
+                    "fill-all",
+                    "layout-dashboard",
+                    "Every screen",
+                    "Put the selected wallpaper on every screen, framing each as you like",
+                    has_selection,
+                )
                 .when(has_selection, |d| {
-                    d.on_click(
-                        cx.listener(|this, _, _, cx| this.open_span_editor(super::span_editor::ComposeExit::Plan, cx)),
-                    )
+                    d.on_click(cx.listener(|this, _, _, cx| {
+                        this.open_composer(ComposeMode::Every, None, super::span_editor::ComposeExit::Plan, cx)
+                    }))
                 })
                 .into_any_element(),
-        ];
-        // Copy one surface's wallpapers onto the other, set at once.
-        if lock_reach.is_some() {
-            let has_desktop = !self.applied.desktop.is_empty();
-            let has_lock = !self.applied.lock.is_empty();
-            if matches!(mode, TargetMode::Lock | TargetMode::Both) {
-                tiles.push(
-                    tile(
-                        "copy-desktop",
-                        "monitor",
-                        "From desktop",
-                        "Plan the desktop's wallpapers for the lock screen",
-                        has_desktop,
-                    )
-                    .when(has_desktop, |d| {
+                tile("span", "frame", "Span", "One picture across every screen", has_selection)
+                    .when(has_selection, |d| {
                         d.on_click(cx.listener(|this, _, _, cx| {
-                            this.lock = this.applied.desktop.clone();
-                            cx.notify();
+                            this.open_span_editor(super::span_editor::ComposeExit::Plan, cx)
                         }))
                     })
                     .into_any_element(),
-                );
-            }
-            if matches!(mode, TargetMode::Desktop | TargetMode::Both) {
-                tiles.push(
-                    tile(
-                        "copy-lock",
-                        "lock",
-                        "From lock",
-                        "Plan the lock screen's wallpapers for the desktop",
-                        has_lock,
-                    )
-                    .when(has_lock, |d| {
-                        d.on_click(cx.listener(|this, _, _, cx| {
-                            this.desktop = this.applied.lock.clone();
-                            cx.notify();
-                        }))
-                    })
-                    .into_any_element(),
-                );
-            }
-        }
-        let cols = tiles.len() as u16;
+            ]
+        };
+        let cols = tiles.len().max(1) as u16;
         let screen_status: AnyElement = if fetching > 0 {
             h_flex()
                 .gap_1()
@@ -595,10 +594,12 @@ impl Muralist {
             .child(layouts)
             .child(div().text_xs().text_color(p.dim).child(if has_selection {
                 "Click a screen (or drop a card on one) to arrange it, or use Every screen or Span."
+            } else if staged {
+                "Your plan is ready: Set below puts it up."
             } else {
-                "Pick a wallpaper first, then arrange it on your screens here."
+                "Pick a wallpaper to arrange it on your screens."
             }))
-            .child(div().grid().grid_cols(cols).gap_2().children(tiles))
+            .when(!tiles.is_empty(), |d| d.child(div().grid().grid_cols(cols).gap_2().children(tiles)))
             .into_any_element();
         let s3 = if staged {
             StepState::Done
