@@ -963,6 +963,8 @@ pub struct Muralist {
     provenance: crate::provenance::Provenance,
     /// Wallhaven IDs being looked up right now.
     provenance_pending: HashSet<String>,
+    /// The background lookup of saved files: how many done, of how many.
+    identifying: Option<(usize, usize)>,
     /// The gallery the Galleries tab shows.
     gallery: Option<u64>,
     gallery_work: HashMap<u64, galleries::GalleryWork>,
@@ -1203,6 +1205,7 @@ impl Muralist {
             galleries: Galleries::load(),
             provenance: crate::provenance::Provenance::load(),
             provenance_pending: HashSet::new(),
+            identifying: None,
             gallery: None,
             gallery_work: HashMap::new(),
             import: None,
@@ -2774,11 +2777,37 @@ impl Muralist {
                             .on_click(open_dir.clone()),
                     )
                     .child(div().flex_1())
-                    .child(div().flex_none().text_xs().text_color(p.dim).child(format!(
-                        "{} wallpaper{}",
-                        thousands(n as u64),
-                        if n == 1 { "" } else { "s" }
-                    )));
+                    // While saved files are being identified: how far along,
+                    // in place of the count. Gone once they're all known.
+                    .map(|d| match self.identifying {
+                        Some((done, total)) => d.child(
+                            h_flex()
+                                .id("identifying")
+                                .flex_none()
+                                .gap_2()
+                                .text_xs()
+                                .text_color(p.muted)
+                                .tooltip(|window, cx| {
+                                    Tooltip::new("Looking up what your saved wallpapers are on Wallhaven")
+                                        .build(window, cx)
+                                })
+                                .child(format!("Identifying {done} of {total}"))
+                                .child(
+                                    div().w(px(96.)).h(px(4.)).rounded_full().bg(with_alpha(p.fg, 0.1)).child(
+                                        div()
+                                            .h_full()
+                                            .rounded_full()
+                                            .bg(p.accent)
+                                            .w(relative((done as f32 / total.max(1) as f32).max(0.04))),
+                                    ),
+                                ),
+                        ),
+                        None => d.child(div().flex_none().text_xs().text_color(p.dim).child(format!(
+                            "{} wallpaper{}",
+                            thousands(n as u64),
+                            if n == 1 { "" } else { "s" }
+                        ))),
+                    });
                 let actions = segmented_track(p)
                     .flex_none()
                     .child(
@@ -3920,32 +3949,48 @@ impl Muralist {
             return;
         }
         let client = self.client.clone();
+        let total = ids.len();
+        self.identifying = Some((0, total));
+        cx.notify();
         cx.spawn(async move |this, cx| {
-            let mut found = 0;
-            for id in ids {
+            for (i, id) in ids.into_iter().enumerate() {
                 let skip = this
                     .update(cx, |this, _| {
                         this.provenance.records.contains_key(&id) || this.provenance_pending.contains(&id)
                     })
                     .unwrap_or(true);
-                if skip {
-                    continue;
+                if !skip {
+                    let client = client.clone();
+                    let got = cx
+                        .background_executor()
+                        .spawn(async move { client.wallpaper(&id).and_then(|w| crate::provenance::remember(&w)) })
+                        .await;
+                    this.update(cx, |this, _| {
+                        // Each card takes on its purity as soon as it's known.
+                        if got.is_ok() {
+                            this.provenance = crate::provenance::Provenance::load();
+                        }
+                    })
+                    .ok();
                 }
-                let client = client.clone();
-                let got = cx
-                    .background_executor()
-                    .spawn(async move { client.wallpaper(&id).and_then(|w| crate::provenance::remember(&w)) })
-                    .await;
-                found += usize::from(got.is_ok());
-                cx.background_executor().timer(std::time::Duration::from_millis(1500)).await;
+                let more = this
+                    .update(cx, |this, cx| {
+                        this.identifying = Some((i + 1, total));
+                        cx.notify();
+                    })
+                    .is_ok();
+                if !more {
+                    return;
+                }
+                if !skip && i + 1 < total {
+                    cx.background_executor().timer(std::time::Duration::from_millis(1500)).await;
+                }
             }
-            if found > 0 {
-                this.update(cx, |this, cx| {
-                    this.provenance = crate::provenance::Provenance::load();
-                    cx.notify();
-                })
-                .ok();
-            }
+            this.update(cx, |this, cx| {
+                this.identifying = None;
+                cx.notify();
+            })
+            .ok();
         })
         .detach();
     }
