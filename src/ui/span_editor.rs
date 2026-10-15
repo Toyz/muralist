@@ -8,7 +8,7 @@ use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::{BtnKind, INSPECTOR_PAD, INSPECTOR_W, Item, Muralist, Target, button, icon, icon_button, pal, with_alpha};
+use super::{BtnKind, Item, Muralist, Target, button, icon, icon_button, pal, with_alpha};
 use crate::config::cache_dir;
 use crate::span::{self, Framing};
 
@@ -120,7 +120,7 @@ impl Muralist {
             if let Some(fit) = self.fitted(&full, lw, lh) {
                 return Some(fit);
             }
-            let pw = ((INSPECTOR_W - INSPECTOR_PAD * 2.) * self.scale).round() as u32;
+            let pw = self.fit_width();
             let ph = (self.preview_h() * self.scale).round() as u32;
             if let Some(fit) = self.fitted(&full, pw, ph) {
                 return Some(fit);

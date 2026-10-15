@@ -175,6 +175,27 @@ impl Muralist {
             .sum()
     }
 
+    /// Puts the staged screens back to what's actually up.
+    pub(super) fn discard_staged(&mut self, cx: &mut Context<Self>) {
+        for t in self.target.targets() {
+            match t {
+                Target::Desktop => self.desktop = self.applied.desktop.clone(),
+                Target::Lock => self.lock = self.applied.lock.clone(),
+            }
+        }
+        self.landing.clear();
+        self.stage_gen += 1;
+        self.set_status("Staged changes discarded", false, cx);
+        cx.notify();
+    }
+
+    fn discard_button(&self, id: &'static str, cx: &mut Context<Self>) -> kit::Btn {
+        kit::Btn::new(id)
+            .icon("undo-2")
+            .tooltip("Discard staged changes")
+            .on_click(cx.listener(|this, _, _, cx| this.discard_staged(cx)))
+    }
+
     /// The screens stage. `width` is the main column's width.
     pub(super) fn render_stage(&mut self, width: f32, cx: &mut Context<Self>) -> AnyElement {
         let p = pal();
@@ -362,7 +383,13 @@ impl Muralist {
             .loading(busy)
             .disabled(changes == 0 && !busy)
             .on_click(cx.listener(|this, _, _, cx| this.apply(this.target.targets(), cx)));
-        let right = v_flex().flex_none().w(px(STAGE_SIDE_W)).gap_2().child(actions).child(apply);
+        let staged = changes > 0 || fetching > 0;
+        let right = v_flex().flex_none().w(px(STAGE_SIDE_W)).gap_2().child(actions).child(
+            h_flex()
+                .gap_2()
+                .child(div().flex_1().child(apply))
+                .when(staged, |d| d.child(self.discard_button("stage-discard", cx))),
+        );
 
         shell()
             .child(left)
@@ -422,7 +449,7 @@ impl Muralist {
 
         // Pick a screen: the same desk as the stage, small, right here.
         let targets = self.target.targets();
-        let avail = super::DETAILS_W - CARD_PAD * 2.;
+        let avail = self.details_base() - CARD_PAD * 2.;
         let per_w = (avail - 12. * (targets.len() as f32 - 1.)) / targets.len() as f32;
         let layouts: Vec<AnyElement> = if supported {
             targets
@@ -467,18 +494,26 @@ impl Muralist {
                         .child(h_flex().justify_center().gap_3().children(layouts)),
                 )
                 .when(changes > 0 || busy, |d| {
+                    let discard = self.discard_button("use-discard", cx);
                     d.child(
-                        kit::Btn::new("use-apply")
-                            .label(if fetching > 0 {
-                                format!("Fetching {fetching}")
-                            } else {
-                                format!("Apply {changes} change{}", if changes == 1 { "" } else { "s" })
-                            })
-                            .icon("check")
-                            .primary()
-                            .full()
-                            .loading(busy)
-                            .on_click(cx.listener(|this, _, _, cx| this.apply(this.target.targets(), cx))),
+                        h_flex()
+                            .gap_2()
+                            .child(
+                                div().flex_1().child(
+                                    kit::Btn::new("use-apply")
+                                        .label(if fetching > 0 {
+                                            format!("Fetching {fetching}")
+                                        } else {
+                                            format!("Apply {changes} change{}", if changes == 1 { "" } else { "s" })
+                                        })
+                                        .icon("check")
+                                        .primary()
+                                        .full()
+                                        .loading(busy)
+                                        .on_click(cx.listener(|this, _, _, cx| this.apply(this.target.targets(), cx))),
+                                ),
+                            )
+                            .child(discard),
                     )
                 })
                 .child(

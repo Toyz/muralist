@@ -10,8 +10,8 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::{
-    FullPhase, INSPECTOR_PAD, INSPECTOR_W, Item, Muralist, Placement, Tab, develop_bands, fade_in, file_name, glass,
-    icon, kit, local_key, pal, progress_line, purity_color, purity_label, radius, segment, segmented_track, with_alpha,
+    FullPhase, Item, Muralist, Placement, Tab, develop_bands, fade_in, file_name, glass, icon, kit, local_key, pal,
+    progress_line, purity_color, purity_label, radius, segment, segmented_track, with_alpha,
 };
 use crate::span::{self, Framing};
 
@@ -176,7 +176,7 @@ impl Muralist {
             _ => None,
         };
         let preview_fit = full.as_deref().and_then(|f| {
-            let w = ((INSPECTOR_W - INSPECTOR_PAD * 2.) * self.scale).round() as u32;
+            let w = self.fit_width();
             let h = (self.preview_h() * self.scale).round() as u32;
             self.fitted(f, w, h)
         });
@@ -1073,7 +1073,7 @@ impl Muralist {
                     .into_any_element()
             }
         };
-        self.details_w = super::DETAILS_W;
+        self.details_w = self.details_base();
         v_flex()
             .id("lb-info-drawer")
             .occlude()

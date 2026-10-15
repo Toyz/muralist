@@ -8,9 +8,7 @@ use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::{
-    INSPECTOR_PAD, INSPECTOR_W, Item, Muralist, TAG_LIMIT, icon, pal, purity_color, radius, section, with_alpha,
-};
+use super::{Item, Muralist, TAG_LIMIT, icon, pal, purity_color, radius, section, with_alpha};
 use crate::thumbs::Job;
 use crate::wallhaven::{SearchParams, Sorting, Tag, Wallpaper};
 
@@ -46,7 +44,7 @@ impl Muralist {
         };
         // Same file the preview shows, so the mask lines up exactly.
         let fit = full.as_deref().and_then(|f| {
-            let w = ((INSPECTOR_W - INSPECTOR_PAD * 2.) * self.scale).round() as u32;
+            let w = self.fit_width();
             let h = (self.preview_h() * self.scale).round() as u32;
             self.fitted(f, w, h)
         });

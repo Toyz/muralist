@@ -8,6 +8,7 @@ mod history;
 mod kit;
 mod lightbox;
 mod peek;
+mod ring;
 mod rotate;
 mod searchbar;
 mod settings;
@@ -41,22 +42,25 @@ use crate::span;
 use crate::thumbs::{Job, ThumbPool, remote_cache_path};
 use crate::wallhaven::{Client, Progress, SearchParams, Sorting, TOP_RANGES, UserSettings, Wallpaper, WallpaperInfo};
 
+/// Default panel widths, and how far they can be dragged.
 const SIDEBAR_W: f32 = 264.;
-/// Content width of the sidebar's Info view.
-const DETAILS_W: f32 = INSPECTOR_W - INSPECTOR_PAD * 2.;
+const INSPECTOR_W: f32 = 420.;
+const SIDEBAR_RANGE: (f32, f32) = (224., 400.);
+const INSPECTOR_RANGE: (f32, f32) = (340., 640.);
+/// The grid never gets narrower than this when panels are dragged.
+const MIN_GRID_W: f32 = 460.;
 const TITLE_H: f32 = 56.;
 const CARD_PAD: f32 = 16.;
 /// Sidebar cards are narrower, so a little tighter.
 const SIDE_CARD_PAD: f32 = 12.;
-const INSPECTOR_W: f32 = 420.;
 const INSPECTOR_PAD: f32 = 20.;
 /// Preview height when nothing (or nothing measurable) is selected.
 const PREVIEW_H: f32 = 236.;
 
 /// Preview box height that matches an image's shape: short for ultrawides,
 /// tall for portraits, clamped so it never takes over the sidebar.
-fn preview_h_for(aspect: f32) -> f32 {
-    (DETAILS_W / aspect.max(0.1)).clamp(150., 440.).round()
+fn preview_h_for(aspect: f32, width: f32) -> f32 {
+    (width / aspect.max(0.1)).clamp(150., 440.).round()
 }
 /// Seconds of pointer travel to extrapolate when predicting the target card.
 const TOAST_FOR: std::time::Duration = std::time::Duration::from_millis(3500);
@@ -426,6 +430,8 @@ fn keycap(label: &'static str, p: Pal) -> Div {
 
 /// How long the active nav tile holds each image before dissolving.
 const NAV_HOLD_SECS: f32 = 3.5;
+/// Corner radius of the nav tiles.
+const NAV_TILE_R: f32 = 8.;
 
 /// Weight of one image in a looping dissolve, where `phase` counts images
 /// from this one (0 = its turn starting) and `n` is how many there are. Each
@@ -832,6 +838,14 @@ impl Target {
     }
 }
 
+/// A panel edge being dragged: which, where the drag began, and the
+/// panel's width then.
+#[derive(Clone, Copy)]
+enum Resize {
+    Sidebar { from_x: Pixels, from_w: f32 },
+    Inspector { from_x: Pixels, from_w: f32 },
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TargetMode {
     Desktop,
@@ -884,6 +898,10 @@ fn is_image(path: &Path) -> bool {
 }
 
 pub struct Muralist {
+    /// Current panel widths (see `SIDEBAR_RANGE`, `INSPECTOR_RANGE`).
+    side_w: f32,
+    insp_w: f32,
+    resizing: Option<Resize>,
     cfg: Config,
     /// The desktop integration (see `crate::backend`).
     backend: Arc<Session>,
@@ -926,6 +944,9 @@ pub struct Muralist {
     gallery_work: HashMap<u64, galleries::GalleryWork>,
     import: Option<galleries::ImportState>,
     picker: Option<galleries::Picker>,
+    ring: Option<ring::Ring>,
+    /// Which ring action the pointer is over.
+    ring_hover: Option<usize>,
     /// Gallery whose name is being edited in the top bar.
     renaming: Option<u64>,
     /// Gallery whose delete button is waiting for a second click.
@@ -963,6 +984,8 @@ pub struct Muralist {
     slot: Option<slot::Slot>,
     /// Spun wallpapers still downloading, by monitor.
     landing: Vec<(String, Wallpaper)>,
+    /// Bumped by Discard, so downloads started before it don't re-stage.
+    stage_gen: u64,
     /// Mosaic rows: per row, (item index, card width).
     justified: Vec<Vec<(usize, f32)>>,
     justified_h: f32,
@@ -1154,6 +1177,8 @@ impl Muralist {
             gallery_work: HashMap::new(),
             import: None,
             picker: None,
+            ring: None,
+            ring_hover: None,
             renaming: None,
             confirm_delete: None,
             gallery_name,
@@ -1165,7 +1190,10 @@ impl Muralist {
             full: HashMap::new(),
             tags_expanded: false,
             precog: Precog::default(),
-            details_w: DETAILS_W,
+            details_w: cfg.inspector_width.clamp(INSPECTOR_RANGE.0, INSPECTOR_RANGE.1) - INSPECTOR_PAD * 2.,
+            side_w: cfg.sidebar_width.clamp(SIDEBAR_RANGE.0, SIDEBAR_RANGE.1),
+            insp_w: cfg.inspector_width.clamp(INSPECTOR_RANGE.0, INSPECTOR_RANGE.1),
+            resizing: None,
             inspector_tab: InspectorTab::Set,
             scope: None,
             xray_palettes: HashMap::new(),
@@ -1181,6 +1209,7 @@ impl Muralist {
             history_hover: None,
             slot: None,
             landing: Vec::new(),
+            stage_gen: 0,
             justified: Vec::new(),
             justified_h: 200.,
             local_dims: HashMap::new(),
@@ -1274,7 +1303,7 @@ impl Muralist {
         };
         // Centered under the grid; above the filmstrip in the lightbox.
         let bottom = if self.lightbox { 116. } else { 20. };
-        let (left, right) = if self.lightbox { (0., 0.) } else { (SIDEBAR_W, INSPECTOR_W) };
+        let (left, right) = if self.lightbox { (0., 0.) } else { (self.side_w, self.insp_w) };
         Some(
             h_flex()
                 .absolute()
@@ -1712,9 +1741,11 @@ impl Muralist {
     /// Queue the preview- and screen-sized copies so neither the inspector
     /// nor the lightbox ever waits on a resize.
     fn prewarm_fits(&mut self, src: &Path) {
-        let preview_h =
-            image::image_dimensions(src).map(|(w, h)| preview_h_for(w as f32 / h.max(1) as f32)).unwrap_or(PREVIEW_H);
-        let w = ((INSPECTOR_W - INSPECTOR_PAD * 2.) * self.scale).round() as u32;
+        let base = self.details_base();
+        let preview_h = image::image_dimensions(src)
+            .map(|(w, h)| preview_h_for(w as f32 / h.max(1) as f32, base))
+            .unwrap_or(PREVIEW_H);
+        let w = self.fit_width();
         let h = (preview_h * self.scale).round() as u32;
         self.fitted(src, w, h);
         let bucket = |v: f32| ((v * self.scale / 256.).ceil() * 256.) as u32;
@@ -1724,7 +1755,8 @@ impl Muralist {
 
     /// Preview box height for the current selection.
     fn preview_h(&self) -> f32 {
-        self.selected_dims.map(|(w, h)| preview_h_for(w as f32 / h.max(1) as f32)).unwrap_or(PREVIEW_H)
+        let base = self.details_base();
+        self.selected_dims.map(|(w, h)| preview_h_for(w as f32 / h.max(1) as f32, base)).unwrap_or(PREVIEW_H)
     }
 
     /// High-quality copy of `src` fitting `w`x`h` physical pixels.
@@ -1964,6 +1996,14 @@ impl Muralist {
             Placement::Monitor(name) => Some(name.clone()),
             _ => None,
         };
+        // The Wallhaven thumbnail stands in for the downloaded file's own
+        // until that's made, so a screen never blinks to empty in between.
+        let stand_in = match (&item, &placement) {
+            (_, Placement::Span) => None,
+            (Item::Remote(w), _) => self.thumbs.get(&format!("wh-{}", w.id)).cloned(),
+            _ => None,
+        };
+        let generation = self.stage_gen;
         self.set_status(msg, false, cx);
 
         cx.spawn(async move |this, cx| {
@@ -1984,8 +2024,24 @@ impl Muralist {
                 if let Some(name) = &landed {
                     this.landing.retain(|(m, _)| m != name);
                 }
+                // Discarded while it downloaded.
+                if this.stage_gen != generation {
+                    return;
+                }
                 match result {
                     Ok(map) => {
+                        if let Some(t) = &stand_in {
+                            for path in map.values() {
+                                let key = local_key(path);
+                                if !this.thumbs.contains_key(&key) {
+                                    this.thumbs.insert(key.clone(), t.clone());
+                                    // Still make the real one (and its palette).
+                                    if this.requested.insert(key.clone()) {
+                                        this.pool.request(Job::Local { key, path: path.clone() });
+                                    }
+                                }
+                            }
+                        }
                         for t in &targets {
                             match t {
                                 Target::Desktop => this.desktop.extend(map.clone()),
@@ -2159,7 +2215,11 @@ impl Muralist {
             let group = SharedString::from(format!("{id}-g"));
             let n = thumbs.len();
             let layer = |path: PathBuf, gray: bool| {
-                div().absolute().inset_0().child(img(path).size_full().object_fit(ObjectFit::Cover).grayscale(gray))
+                // Rounded on the image itself: the tile's clip is square.
+                div()
+                    .absolute()
+                    .inset_0()
+                    .child(radius(img(path).size_full().object_fit(ObjectFit::Cover).grayscale(gray), NAV_TILE_R))
             };
             // The active tile dissolves from one image to the next, so they
             // blend over time instead of sitting side by side.
@@ -2187,7 +2247,7 @@ impl Muralist {
                 .group(group.clone())
                 .relative()
                 .h(px(54.))
-                .rounded_lg()
+                .map(|d| radius(d, NAV_TILE_R))
                 .overflow_hidden()
                 .cursor_pointer()
                 .bg(linear_gradient(
@@ -2222,7 +2282,7 @@ impl Muralist {
                         )
                     }
                 })
-                .child(div().absolute().inset_0().bg(linear_gradient(
+                .child(div().absolute().inset_0().map(|d| radius(d, NAV_TILE_R)).bg(linear_gradient(
                     0.,
                     linear_color_stop(hsla(0., 0., 0., if on { 0.7 } else { 0.72 }), 0.),
                     linear_color_stop(hsla(0., 0., 0., if on { 0.0 } else { 0.18 }), 1.),
@@ -2333,7 +2393,8 @@ impl Muralist {
             });
             cards = cards.child(
                 side_card("arrow-down-wide-narrow", "Sort", Some(sort_summary.into()), p)
-                    .child(opt_grid(4).children(sorts))
+                    // Each option as wide as its label; rows fill the card.
+                    .child(h_flex().flex_wrap().gap_1p5().children(sorts.map(|o| o.flex_grow(1.).px_2p5())))
                     .children(ranges),
             );
 
@@ -2504,7 +2565,7 @@ impl Muralist {
         v_flex()
             .relative()
             .overflow_hidden()
-            .w(px(SIDEBAR_W))
+            .w(px(self.side_w))
             .h_full()
             .flex_none()
             .bg(p.surface)
@@ -2977,9 +3038,8 @@ impl Muralist {
             .on_mouse_down(MouseButton::Right, {
                 let item = item.clone();
                 cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
-                    this.picker = Some(galleries::Picker { item: item.clone(), at: ev.position });
+                    this.open_ring(item.clone(), ev.position, cx);
                     cx.stop_propagation();
-                    cx.notify();
                 })
             })
             .on_drag(drag::CardDrag { item: item.clone(), thumb: drag_thumb }, |drag, offset, _, cx| {
@@ -3452,7 +3512,7 @@ impl Muralist {
         let phase = self.full_phase(item);
         // Show a downscale made for exactly this box; the raw original would
         // alias when the GPU shrinks it 10-20x.
-        let fit_w = ((INSPECTOR_W - INSPECTOR_PAD * 2.) * self.scale).round() as u32;
+        let fit_w = self.fit_width();
         let preview_h = self.preview_h();
         let fit_h = (preview_h * self.scale).round() as u32;
         let fit = full.as_deref().and_then(|f| self.fitted(f, fit_w, fit_h));
@@ -3689,6 +3749,105 @@ impl Muralist {
         }
     }
 
+    /// Content width inside the inspector.
+    fn details_base(&self) -> f32 {
+        self.insp_w - INSPECTOR_PAD * 2.
+    }
+
+    /// Pixel width to resize previews to. Rounded up to a 64px step, so
+    /// dragging the inspector's edge doesn't queue a resize per pixel.
+    fn fit_width(&self) -> u32 {
+        ((self.details_base() * self.scale / 64.).ceil() * 64.) as u32
+    }
+
+    /// Follows a panel-edge drag, keeping the grid usable.
+    fn drag_resize(&mut self, x: Pixels, cx: &mut Context<Self>) {
+        let Some(r) = self.resizing else { return };
+        let room = self.viewport.0 - MIN_GRID_W;
+        match r {
+            Resize::Sidebar { from_x, from_w } => {
+                let w = from_w + f32::from(x - from_x);
+                self.side_w = w.clamp(SIDEBAR_RANGE.0, SIDEBAR_RANGE.1.min(room - self.insp_w).max(SIDEBAR_RANGE.0));
+            }
+            Resize::Inspector { from_x, from_w } => {
+                let w = from_w - f32::from(x - from_x);
+                self.insp_w =
+                    w.clamp(INSPECTOR_RANGE.0, INSPECTOR_RANGE.1.min(room - self.side_w).max(INSPECTOR_RANGE.0));
+            }
+        }
+        if !self.lightbox {
+            self.details_w = self.details_base();
+        }
+        cx.notify();
+    }
+
+    fn end_resize(&mut self, cx: &mut Context<Self>) {
+        if self.resizing.take().is_some() {
+            self.save_widths(cx);
+        }
+    }
+
+    fn save_widths(&mut self, cx: &mut Context<Self>) {
+        self.cfg.sidebar_width = self.side_w;
+        self.cfg.inspector_width = self.insp_w;
+        if let Err(e) = self.cfg.save() {
+            eprintln!("saving config: {e:#}");
+        }
+        if !self.lightbox {
+            self.details_w = self.details_base();
+        }
+        cx.notify();
+    }
+
+    /// The grab strip on a panel's inner edge. Double-click resets it.
+    fn resize_handle(&self, sidebar: bool, cx: &mut Context<Self>) -> Stateful<Div> {
+        let p = pal();
+        let active = match self.resizing {
+            Some(Resize::Sidebar { .. }) => sidebar,
+            Some(Resize::Inspector { .. }) => !sidebar,
+            None => false,
+        };
+        let group: SharedString = if sidebar { "grip-side".into() } else { "grip-insp".into() };
+        div()
+            .id(if sidebar { "resize-sidebar" } else { "resize-inspector" })
+            .group(group.clone())
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .w(px(8.))
+            .map(|d| if sidebar { d.left(px(self.side_w - 4.)) } else { d.right(px(self.insp_w - 4.)) })
+            .cursor_col_resize()
+            .flex()
+            .justify_center()
+            .child(
+                div()
+                    .w(px(2.))
+                    .h_full()
+                    .bg(with_alpha(p.accent, if active { 0.8 } else { 0. }))
+                    .group_hover(group, move |s| s.bg(with_alpha(p.accent, 0.5))),
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
+                    if ev.click_count >= 2 {
+                        if sidebar {
+                            this.side_w = SIDEBAR_W;
+                        } else {
+                            this.insp_w = INSPECTOR_W;
+                        }
+                        this.save_widths(cx);
+                    } else {
+                        this.resizing = Some(if sidebar {
+                            Resize::Sidebar { from_x: ev.position.x, from_w: this.side_w }
+                        } else {
+                            Resize::Inspector { from_x: ev.position.x, from_w: this.insp_w }
+                        });
+                    }
+                    cx.stop_propagation();
+                }),
+            )
+    }
+
     fn render_inspector(&mut self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let p = pal();
         let details = self.render_details(cx);
@@ -3771,7 +3930,7 @@ impl Muralist {
         v_flex()
             .relative()
             .overflow_hidden()
-            .w(px(INSPECTOR_W))
+            .w(px(self.insp_w))
             .h_full()
             .flex_none()
             .bg(p.surface)
@@ -3926,13 +4085,13 @@ impl Render for Muralist {
             0.
         };
         self.content = (viewport_w - frame, f32::from(window.viewport_size().height) - frame);
-        let grid_w = (viewport_w - frame - SIDEBAR_W - INSPECTOR_W - GRID_PAD * 2. - SCROLLBAR_W).max(MIN_CARD_W);
+        let grid_w = (viewport_w - frame - self.side_w - self.insp_w - GRID_PAD * 2. - SCROLLBAR_W).max(MIN_CARD_W);
 
         let sidebar = self.render_sidebar(cx);
         let topbar = self.render_topbar(cx);
         let query_chips = if self.tab == Tab::Discover { self.render_query_chips(cx) } else { None };
         let recent = if self.tab == Tab::Discover { self.render_recent(cx) } else { None };
-        let stage = self.render_stage(viewport_w - frame - SIDEBAR_W - INSPECTOR_W, cx);
+        let stage = self.render_stage(viewport_w - frame - self.side_w - self.insp_w, cx);
         let grid = if self.tab == Tab::History {
             self.render_history(cx)
         } else {
@@ -3948,12 +4107,20 @@ impl Render for Muralist {
         let lightbox = self.lightbox.then(|| self.render_lightbox(window, cx));
         let settings = self.settings_open.then(|| self.render_settings(cx));
         let picker = self.render_picker(cx);
+        let ring = self.render_ring(cx);
         let span_editor = self.render_span_editor(cx);
 
         h_flex()
             .id("root")
             .track_focus(&self.main_focus)
             .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
+                if ev.keystroke.key == "escape" && (this.ring.is_some() || this.picker.is_some()) {
+                    this.ring = None;
+                    this.picker = None;
+                    cx.stop_propagation();
+                    cx.notify();
+                    return;
+                }
                 if ev.keystroke.key == "space" && !this.typing(window, cx) {
                     if !ev.is_held {
                         this.peek_start(cx);
@@ -3981,6 +4148,17 @@ impl Render for Muralist {
             .bg(p.bg)
             .text_color(p.fg)
             .text_sm()
+            .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, _, cx| {
+                if this.resizing.is_some() {
+                    if ev.pressed_button == Some(MouseButton::Left) {
+                        this.drag_resize(ev.position.x, cx);
+                    } else {
+                        // Released outside the window.
+                        this.end_resize(cx);
+                    }
+                }
+            }))
+            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| this.end_resize(cx)))
             .child(sidebar)
             .child(
                 v_flex()
@@ -3996,7 +4174,9 @@ impl Render for Muralist {
             )
             .child(inspector)
             .children(lightbox)
+            .when(!self.lightbox, |d| d.child(self.resize_handle(true, cx)).child(self.resize_handle(false, cx)))
             .children(picker)
+            .children(ring)
             .children(toast)
             .children(peek_badge)
             .children(span_editor)

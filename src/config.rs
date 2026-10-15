@@ -100,6 +100,9 @@ pub struct Config {
     pub layout: GridMode,
     /// Order results by hue.
     pub rainbow: bool,
+    /// Panel widths, as last dragged.
+    pub sidebar_width: f32,
+    pub inspector_width: f32,
     /// Auto-rotate interval in minutes; 0 is off.
     pub rotate_minutes: u32,
     pub rotate_source: RotateSource,
@@ -178,6 +181,8 @@ impl Default for Config {
             adaptive_theme: true,
             layout: GridMode::default(),
             rainbow: false,
+            sidebar_width: 264.,
+            inspector_width: 420.,
             rotate_minutes: 0,
             rotate_source: RotateSource::default(),
             rotate_match_time: true,
