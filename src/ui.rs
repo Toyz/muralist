@@ -996,7 +996,8 @@ pub struct Muralist {
     xray: Option<usize>,
     similar: HashMap<String, details::Similar>,
     /// Tag id -> (name, category); `None` while fetching or if it failed.
-    tag_names: HashMap<u64, Option<(String, String)>>,
+    /// Tags by id, as fetched or seen; `None` while a fetch is out.
+    tag_names: HashMap<u64, Option<crate::wallhaven::Tag>>,
     /// Query text of the last search sent, and a counter for type-ahead debounce.
     last_query: String,
     type_gen: u64,
@@ -1619,7 +1620,7 @@ impl Muralist {
                     Ok(info) => {
                         // Every tag we see makes `id:` chips resolve instantly later.
                         for tag in &info.tags {
-                            this.tag_names.insert(tag.id, Some((tag.name.clone(), tag.category.clone())));
+                            this.tag_names.insert(tag.id, Some(tag.clone()));
                         }
                         // A saved wallpaper keeps its tags for the Library.
                         if this.provenance.records.get(&id).is_some_and(|r| r.tags.is_none()) {
@@ -1639,6 +1640,18 @@ impl Muralist {
     }
 
     /// Put `query` in the search box and run it (used by tags and uploaders).
+    /// Search one tag, from wherever it was clicked: whatever is over the
+    /// grid folds away, and the pill knows the tag (name, kind, purity)
+    /// straight away instead of fetching it.
+    fn search_tag(&mut self, tag: crate::wallhaven::Tag, window: &mut Window, cx: &mut Context<Self>) {
+        let query = format!("id:{}", tag.id);
+        self.tag_names.insert(tag.id, Some(tag));
+        if self.sheet_open() {
+            self.close_sheet(cx);
+        }
+        self.search_for(query, window, cx);
+    }
+
     fn search_for(&mut self, query: String, window: &mut Window, cx: &mut Context<Self>) {
         // Tag / like / user searches become a named pill, not raw text.
         self.scope = smartq::Scope::parse(&query);

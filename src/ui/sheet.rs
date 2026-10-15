@@ -82,7 +82,7 @@ impl Muralist {
         cx.notify();
     }
 
-    fn close_sheet(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn close_sheet(&mut self, cx: &mut Context<Self>) {
         let Some(anim) = self.sheet_anim.as_mut() else {
             self.inspector_tab = InspectorTab::Set;
             cx.notify();

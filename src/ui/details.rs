@@ -310,7 +310,7 @@ impl Muralist {
                 .map(|tag| {
                     ix += 1;
                     let tint = (tag.purity != "sfw" && !tag.purity.is_empty()).then(|| purity_color(&tag.purity));
-                    let query = format!("id:{}", tag.id);
+                    let picked = (*tag).clone();
                     h_flex()
                         .id(("tag", ix))
                         .gap_1p5()
@@ -326,7 +326,7 @@ impl Muralist {
                         .hover(move |s| s.bg(p.elevated).text_color(p.fg).border_color(p.border_strong))
                         .when_some(tint, |d, c| d.child(div().size(px(5.)).rounded_full().bg(c)))
                         .child(tag.name.clone())
-                        .on_click(cx.listener(move |this, _, window, cx| this.search_for(query.clone(), window, cx)))
+                        .on_click(cx.listener(move |this, _, window, cx| this.search_tag(picked.clone(), window, cx)))
                         // Dropping in one after another.
                         .relative()
                         .with_animation(

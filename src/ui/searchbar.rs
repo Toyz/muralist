@@ -155,13 +155,34 @@ impl Muralist {
     ) -> (AnyElement, String, Option<String>) {
         let p = pal();
         match scope {
-            smartq::Scope::Tag(id) => {
-                let lead = icon("book-open").size_3().text_color(p.accent).into_any_element();
-                match self.tag_label(*id, cx) {
-                    Some((name, category)) => (lead, name, (!category.is_empty()).then_some(category)),
-                    None => (lead, "Tag".into(), Some("loading".into())),
+            smartq::Scope::Tag(id) => match self.tag_label(*id, cx) {
+                // The tag's purity leads: a dot in its color, then its name.
+                Some(t) => {
+                    let c = super::purity_color(&t.purity);
+                    let lead = h_flex()
+                        .gap_1()
+                        .child(icon("book-open").size_3().text_color(c))
+                        .child(
+                            h_flex()
+                                .gap_1()
+                                .px_1p5()
+                                .rounded_full()
+                                .bg(with_alpha(c, 0.18))
+                                .text_size(px(9.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(c)
+                                .child(div().size(px(5.)).rounded_full().bg(c))
+                                .child(super::purity_label(&t.purity)),
+                        )
+                        .into_any_element();
+                    (lead, t.name, (!t.category.is_empty()).then_some(t.category))
                 }
-            }
+                None => (
+                    icon("book-open").size_3().text_color(p.accent).into_any_element(),
+                    "Tag".into(),
+                    Some("loading".into()),
+                ),
+            },
             smartq::Scope::Like(id) => {
                 let url = format!("https://th.wallhaven.cc/small/{}/{}.jpg", &id[..2.min(id.len())], id);
                 let thumb = self.thumb(format!("wh-{id}"), |key| Job::Remote { key, url });
@@ -184,7 +205,7 @@ impl Muralist {
     }
 
     /// A tag id's name and category, fetched once and cached.
-    fn tag_label(&mut self, id: u64, cx: &mut Context<Self>) -> Option<(String, String)> {
+    pub(super) fn tag_label(&mut self, id: u64, cx: &mut Context<Self>) -> Option<crate::wallhaven::Tag> {
         if let Some(known) = self.tag_names.get(&id) {
             return known.clone();
         }
@@ -194,7 +215,7 @@ impl Muralist {
             let result = cx.background_executor().spawn(async move { client.tag(id) }).await;
             if let Ok(tag) = result {
                 this.update(cx, |this, cx| {
-                    this.tag_names.insert(id, Some((tag.name, tag.category)));
+                    this.tag_names.insert(id, Some(tag));
                     cx.notify();
                 })
                 .ok();
@@ -226,14 +247,16 @@ impl Muralist {
             let mut sub: Option<String> = None;
             let mut lead: AnyElement = icon("asterisk").size_3().text_color(p.muted).into_any_element();
             if let Some(id) = lower.strip_prefix("id:").and_then(|v| v.parse::<u64>().ok()) {
-                match self.tag_label(id, cx) {
-                    Some((name, category)) => {
-                        label = name;
-                        sub = (!category.is_empty()).then_some(category);
+                let tag = self.tag_label(id, cx);
+                let tint = tag.as_ref().map_or(p.accent, |t| super::purity_color(&t.purity));
+                match tag {
+                    Some(t) => {
+                        label = t.name;
+                        sub = (!t.category.is_empty()).then_some(t.category);
                     }
                     None => label = format!("tag {id}"),
                 }
-                lead = icon("book-open").size_3().text_color(p.accent).into_any_element();
+                lead = icon("book-open").size_3().text_color(tint).into_any_element();
             } else if let Some(id) = token.strip_prefix("like:").filter(|v| v.len() >= 2) {
                 let url = format!("https://th.wallhaven.cc/small/{}/{}.jpg", &id[..2], id);
                 let thumb = self.thumb(format!("wh-{id}"), |key| Job::Remote { key, url });

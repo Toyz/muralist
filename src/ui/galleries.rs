@@ -175,7 +175,7 @@ impl Muralist {
         let mut search = SavedSearch::from_params(&self.current_search(cx).2);
         // Name a scoped search for what it is, not its token.
         search.label = self.scope.clone().and_then(|scope| match scope {
-            super::smartq::Scope::Tag(id) => self.tag_names.get(&id).cloned().flatten().map(|(name, _)| name),
+            super::smartq::Scope::Tag(id) => self.tag_names.get(&id).cloned().flatten().map(|t| t.name),
             super::smartq::Scope::User(name) => Some(format!("@{name}'s uploads")),
             super::smartq::Scope::Like(id) => Some(format!("Similar to {id}")),
         });
