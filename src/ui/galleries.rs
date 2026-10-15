@@ -48,7 +48,7 @@ pub(super) fn entry_of(item: &Item) -> Entry {
     }
 }
 
-fn item_of(entry: &Entry) -> Item {
+pub(super) fn item_of(entry: &Entry) -> Item {
     match entry {
         Entry::Wallhaven(w) => Item::Remote(w.clone()),
         Entry::Local(p) => Item::Local(p.clone()),

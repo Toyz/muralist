@@ -34,7 +34,7 @@ use gpui_kit::*;
 
 use crate::backend::{Reach, Session};
 use crate::config::{Config, FilterOverrides, GridMode, LockMode, State, cache_dir};
-use crate::gallery::Galleries;
+use crate::gallery::{self as gallery_entry, Galleries};
 use crate::monitors::Monitor;
 use crate::span;
 use crate::thumbs::{Job, ThumbPool, remote_cache_path};
@@ -2063,44 +2063,164 @@ impl Muralist {
 
     // ---- sidebar ------------------------------------------------------------
 
-    fn render_sidebar(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    /// The tab switcher: four live tiles, each a strip of what the tab holds.
+    /// Inactive ones rest in grayscale and bloom into color on hover; the
+    /// active one is in color, edged in the accent, and a light sweeps across
+    /// it when it's chosen.
+    fn render_nav(&mut self, cx: &mut Context<Self>) -> Div {
         let p = pal();
         let tab = self.tab;
-        let has_key = self.client.has_key();
 
-        // The current tab spells itself out; the others fold to icons.
-        let nav = |id: &'static str, icon_name: &'static str, label: &'static str, t: Tab| {
+        // A few thumbnails per tab.
+        let results: Vec<Wallpaper> = self.results.iter().take(3).cloned().collect();
+        let discover: Vec<PathBuf> = results.iter().filter_map(|w| self.remote_thumb(w, false)).collect();
+        let latest: Vec<PathBuf> = self.library.iter().take(3).cloned().collect();
+        let library: Vec<PathBuf> = latest.iter().filter_map(|path| self.local_thumb(path)).collect();
+        let covers: Vec<gallery_entry::Entry> =
+            self.galleries.list.iter().filter_map(|g| g.items.first().cloned()).take(3).collect();
+        let galleries: Vec<PathBuf> = covers
+            .iter()
+            .filter_map(|e| match e {
+                gallery_entry::Entry::Wallhaven(w) => self.remote_thumb(w, false),
+                gallery_entry::Entry::Local(path) => self.local_thumb(path),
+            })
+            .collect();
+        let last_set: Vec<PathBuf> = self
+            .applied
+            .history
+            .iter()
+            .rev()
+            .find(|e| e.target == "desktop")
+            .map(|e| self.monitors.iter().filter_map(|m| e.images.get(&m.name).cloned()).take(3).collect())
+            .unwrap_or_default();
+        let history: Vec<PathBuf> = last_set.iter().filter_map(|path| self.local_thumb(path)).collect();
+
+        // Each tile glows in its own images' colors, like the cards do.
+        let tint_of = |items: Vec<Item>, palettes: &HashMap<PathBuf, Vec<Hsla>>| -> Hsla {
+            let colors: Vec<Hsla> = items.iter().flat_map(|i| gridmodes::item_colors(i, palettes)).collect();
+            glass::glow_color(&colors).unwrap_or(p.accent)
+        };
+        let tints = [
+            tint_of(results.iter().cloned().map(Item::Remote).collect(), &self.local_palettes),
+            tint_of(latest.iter().cloned().map(Item::Local).collect(), &self.local_palettes),
+            tint_of(covers.iter().map(galleries::item_of).collect(), &self.local_palettes),
+            tint_of(last_set.iter().cloned().map(Item::Local).collect(), &self.local_palettes),
+        ];
+
+        let counts = [
+            (self.total > 0).then(|| compact_count(self.total)),
+            Some(compact_count(self.library.len() as u64)),
+            Some(compact_count(self.galleries.list.len() as u64)),
+            Some(compact_count(self.applied.history.len() as u64)),
+        ];
+
+        let tile = |ix: usize,
+                    id: &'static str,
+                    icon_name: &'static str,
+                    label: &'static str,
+                    t: Tab,
+                    thumbs: Vec<PathBuf>| {
             let on = tab == t;
-            h_flex()
+            let c = tints[ix];
+            // Readable on the dark wash at the tile's foot.
+            let label_c = adaptive::readable(Hsla { l: c.l.max(0.62), ..c }, hsla(0., 0., 0.06, 1.), 4.5);
+            let group = SharedString::from(format!("{id}-g"));
+            let strip = |gray: bool| {
+                h_flex().absolute().inset_0().gap(px(1.)).children(thumbs.iter().map(|t| {
+                    div()
+                        .flex_1()
+                        .h_full()
+                        .child(img(t.clone()).size_full().object_fit(ObjectFit::Cover).grayscale(gray))
+                }))
+            };
+            let empty = thumbs.is_empty();
+            div()
                 .id(id)
-                .h(px(32.))
-                .justify_center()
-                .gap_2()
-                .rounded_md()
+                .group(group.clone())
+                .relative()
+                .h(px(54.))
+                .rounded_lg()
+                .overflow_hidden()
                 .cursor_pointer()
-                .map(|d| {
+                .bg(linear_gradient(
+                    135.,
+                    linear_color_stop(with_alpha(c, if on { 0.35 } else { 0.12 }), 0.),
+                    linear_color_stop(p.surface2, 1.),
+                ))
+                .border_1()
+                .border_color(if on { c } else { p.border })
+                .when(!on, |d| d.hover(move |s| s.border_color(with_alpha(c, 0.6))))
+                .when(empty, |d| {
+                    d.child(
+                        div()
+                            .absolute()
+                            .right(px(-6.))
+                            .top(px(-6.))
+                            .child(icon(icon_name).size(px(44.)).text_color(with_alpha(p.fg, 0.06))),
+                    )
+                })
+                // Resting: grayscale under a dark wash. Hover or active: color.
+                .when(!empty, |d| {
                     if on {
-                        d.flex_1()
-                            .px_3()
-                            .bg(p.elevated)
-                            .shadow_sm()
-                            .text_color(p.fg)
-                            .font_weight(FontWeight::MEDIUM)
-                            .child(icon(icon_name).size_4().text_color(p.accent))
-                            .child(div().text_sm().child(label).with_animation(
-                                SharedString::from(format!("nav-label-{id}")),
-                                Animation::new(std::time::Duration::from_millis(220)).with_easing(ease_out_quint()),
-                                |d, t| d.opacity(t),
-                            ))
+                        d.child(strip(false))
                     } else {
-                        d.w(px(40.))
-                            .flex_none()
-                            .text_color(p.muted)
-                            .hover(move |s| s.bg(with_alpha(p.elevated, 0.6)).text_color(p.fg))
-                            .tooltip(move |window, cx| Tooltip::new(label).build(window, cx))
-                            .child(icon(icon_name).size_4())
+                        d.child(strip(true)).child(strip(false).invisible().group_hover(group.clone(), |s| s.visible()))
                     }
                 })
+                .child(div().absolute().inset_0().bg(linear_gradient(
+                    0.,
+                    linear_color_stop(hsla(0., 0., 0., if on { 0.72 } else { 0.82 }), 0.),
+                    linear_color_stop(hsla(0., 0., 0., if on { 0.05 } else { 0.4 }), 1.),
+                )))
+                .when(on, |d| {
+                    // One pass of light across the chosen tile.
+                    d.child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .bottom_0()
+                            .w(px(40.))
+                            .bg(linear_gradient(
+                                90.,
+                                linear_color_stop(hsla(0., 0., 1., 0.), 0.),
+                                linear_color_stop(hsla(0., 0., 1., 0.0), 1.),
+                            ))
+                            .with_animation(
+                                SharedString::from(format!("sweep-{id}")),
+                                Animation::new(std::time::Duration::from_millis(700)).with_easing(ease_in_out),
+                                move |d, t| {
+                                    // The sweep is the tile's own color, lifted.
+                                    let a = (1. - (2. * t - 1.).abs()) * 0.3;
+                                    let light = Hsla { l: 0.8, a, ..c };
+                                    d.left(px(-40. + 200. * t)).bg(linear_gradient(
+                                        90.,
+                                        linear_color_stop(with_alpha(light, 0.), 0.),
+                                        linear_color_stop(light, 0.5),
+                                    ))
+                                },
+                            ),
+                    )
+                })
+                .child(
+                    h_flex()
+                        .absolute()
+                        .left(px(9.))
+                        .right(px(9.))
+                        .bottom(px(6.))
+                        .gap_1p5()
+                        .child(icon(icon_name).size_3p5().text_color(if on { label_c } else { hsla(0., 0., 1., 0.7) }))
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_sm()
+                                .font_weight(if on { FontWeight::SEMIBOLD } else { FontWeight::MEDIUM })
+                                .text_color(if on { white() } else { hsla(0., 0., 1., 0.78) })
+                                .child(label),
+                        )
+                        .children(counts[ix].clone().map(|c| {
+                            div().text_xs().text_color(hsla(0., 0., 1., if on { 0.75 } else { 0.5 })).child(c)
+                        })),
+                )
                 .on_click(cx.listener(move |this, _, _, cx| {
                     match t {
                         Tab::Library => this.refresh_library(),
@@ -2111,11 +2231,23 @@ impl Muralist {
                     cx.notify();
                 }))
         };
-        let nav = segmented_track(p)
-            .child(nav("nav-discover", "compass", "Discover", Tab::Discover))
-            .child(nav("nav-library", "folder", "Library", Tab::Library))
-            .child(nav("nav-galleries", "images", "Galleries", Tab::Galleries))
-            .child(nav("nav-history", "calendar", "History", Tab::History));
+
+        div()
+            .grid()
+            .grid_cols(2)
+            .gap_1p5()
+            .child(tile(0, "nav-discover", "compass", "Discover", Tab::Discover, discover))
+            .child(tile(1, "nav-library", "folder", "Library", Tab::Library, library))
+            .child(tile(2, "nav-galleries", "images", "Galleries", Tab::Galleries, galleries))
+            .child(tile(3, "nav-history", "calendar", "History", Tab::History, history))
+    }
+
+    fn render_sidebar(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let p = pal();
+        let tab = self.tab;
+        let has_key = self.client.has_key();
+
+        let nav = self.render_nav(cx);
 
         let mut cards = v_flex().gap_3().px_3().py_3();
         if tab == Tab::Discover {
