@@ -3,6 +3,7 @@
 //! Remote thumbs are downloaded from Wallhaven; local images are downscaled
 //! with the `image` crate so the UI never decodes full 4K files.
 
+use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -129,11 +130,17 @@ impl ThumbPool {
 fn run(client: &Client, job: &Job) -> Result<PathBuf> {
     let dir = cache_dir().join("thumbs");
     match job {
-        Job::Remote { key, url } => client.download(url, &remote_cache_path(key, url)),
+        Job::Remote { key, url } => {
+            let dest = remote_cache_path(key, url);
+            match reuse(&dest) {
+                Some(hit) => Ok(hit),
+                None => client.download(url, &dest),
+            }
+        }
         Job::XRay { key, path, centers, index } => {
             let dest = dir.join(format!("{}.png", sanitize(key)));
-            if dest.exists() {
-                return Ok(dest);
+            if let Some(hit) = reuse(&dest) {
+                return Ok(hit);
             }
             std::fs::create_dir_all(&dir)?;
             let mut img = image::open(path)?.to_rgb8();
@@ -154,8 +161,8 @@ fn run(client: &Client, job: &Job) -> Result<PathBuf> {
         }
         Job::Pixelate { path, .. } => {
             let dest = dir.join(format!("pix-{:016x}.png", path_hash(path)));
-            if dest.exists() {
-                return Ok(dest);
+            if let Some(hit) = reuse(&dest) {
+                return Ok(hit);
             }
             std::fs::create_dir_all(&dir)?;
             // ~14 blocks across, enlarged with hard edges.
@@ -166,8 +173,8 @@ fn run(client: &Client, job: &Job) -> Result<PathBuf> {
         }
         Job::Blur { path, .. } => {
             let dest = dir.join(format!("blur2-{:016x}.jpg", path_hash(path)));
-            if dest.exists() {
-                return Ok(dest);
+            if let Some(hit) = reuse(&dest) {
+                return Ok(hit);
             }
             std::fs::create_dir_all(&dir)?;
             let small = image::open(path)?.thumbnail(64, 64);
@@ -183,8 +190,8 @@ fn run(client: &Client, job: &Job) -> Result<PathBuf> {
         }
         Job::Fit { path, w, h, .. } => {
             let dest = dir.join(format!("fit-{w}x{h}-{:016x}.jpg", path_hash(path)));
-            if dest.exists() {
-                return Ok(dest);
+            if let Some(hit) = reuse(&dest) {
+                return Ok(hit);
             }
             std::fs::create_dir_all(&dir)?;
             let img = image::open(path)?;
@@ -198,8 +205,8 @@ fn run(client: &Client, job: &Job) -> Result<PathBuf> {
         }
         Job::Local { path, .. } => {
             let dest = dir.join(format!("local-{:016x}.jpg", path_hash(path)));
-            if dest.exists() {
-                return Ok(dest);
+            if let Some(hit) = reuse(&dest) {
+                return Ok(hit);
             }
             std::fs::create_dir_all(&dir)?;
             let img = image::open(path)?;
@@ -208,6 +215,58 @@ fn run(client: &Client, job: &Job) -> Result<PathBuf> {
             Ok(dest)
         }
     }
+}
+
+/// A cached file that's already there: marked as just used (its modified
+/// time is the cache's "last used", since access times are often off) and
+/// handed back.
+pub fn reuse(dest: &Path) -> Option<PathBuf> {
+    if !dest.is_file() {
+        return None;
+    }
+    if let Ok(f) = std::fs::File::options().write(true).open(dest) {
+        let _ = f.set_modified(std::time::SystemTime::now());
+    }
+    Some(dest.to_path_buf())
+}
+
+/// Trims the thumbnail cache to `budget` bytes, least recently used first,
+/// down to 90% so it doesn't sweep again on the very next file. Files in
+/// `keep` (on screen this session) stay. Returns bytes freed and left.
+pub fn sweep(budget: u64, keep: &HashSet<PathBuf>) -> (u64, u64) {
+    sweep_dir(&cache_dir().join("thumbs"), budget, keep)
+}
+
+fn sweep_dir(dir: &Path, budget: u64, keep: &HashSet<PathBuf>) -> (u64, u64) {
+    let mut files: Vec<(std::time::SystemTime, u64, PathBuf)> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let meta = e.metadata().ok().filter(|m| m.is_file())?;
+            Some((meta.modified().ok()?, meta.len(), e.path()))
+        })
+        .collect();
+    let mut total: u64 = files.iter().map(|f| f.1).sum();
+    if total <= budget {
+        return (0, total);
+    }
+    let target = budget / 10 * 9;
+    files.sort_by_key(|f| f.0);
+    let mut freed = 0;
+    for (_, len, path) in files {
+        if total <= target {
+            break;
+        }
+        if keep.contains(&path) {
+            continue;
+        }
+        if std::fs::remove_file(&path).is_ok() {
+            total -= len;
+            freed += len;
+        }
+    }
+    (freed, total)
 }
 
 /// Where a remote job's file lands in the cache.
@@ -230,4 +289,37 @@ pub fn path_hash(path: &Path) -> u64 {
         }
     }
     h.finish()
+}
+
+#[cfg(test)]
+mod lru_tests {
+    use super::sweep_dir;
+    use std::collections::HashSet;
+    use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn sweep_drops_least_recently_used_first() {
+        let dir = std::env::temp_dir().join(format!("muralist-lru-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let base = SystemTime::now() - Duration::from_secs(1000);
+        let paths: Vec<_> = (0..5)
+            .map(|i| {
+                let p = dir.join(format!("f{i}"));
+                std::fs::write(&p, [0u8; 100]).unwrap();
+                let f = std::fs::File::options().write(true).open(&p).unwrap();
+                f.set_modified(base + Duration::from_secs(i * 10)).unwrap();
+                p
+            })
+            .collect();
+        // Keep the oldest: it's on screen.
+        let keep: HashSet<_> = [paths[0].clone()].into();
+        let (freed, left) = sweep_dir(&dir, 300, &keep);
+        assert_eq!((freed, left), (300, 200));
+        let remaining: Vec<bool> = paths.iter().map(|p| p.exists()).collect();
+        assert_eq!(remaining, [true, false, false, false, true]);
+        // Under budget: nothing to do.
+        assert_eq!(sweep_dir(&dir, 1000, &HashSet::new()), (0, 200));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

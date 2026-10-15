@@ -100,6 +100,8 @@ pub struct Config {
     pub layout: GridMode,
     /// Order results by hue.
     pub rainbow: bool,
+    /// Size limit for thumbnails and cached originals, in MB; 0 is none.
+    pub cache_limit_mb: u32,
     /// Panel widths, as last dragged.
     pub sidebar_width: f32,
     pub inspector_width: f32,
@@ -181,6 +183,7 @@ impl Default for Config {
             adaptive_theme: true,
             layout: GridMode::default(),
             rainbow: false,
+            cache_limit_mb: 1024,
             sidebar_width: 264.,
             inspector_width: 420.,
             rotate_minutes: 0,

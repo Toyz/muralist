@@ -130,6 +130,12 @@ fn field_box(input: impl IntoElement, p: Pal) -> Div {
         .child(div().flex_1().child(input))
 }
 
+/// "512 MB", "1.8 GB".
+fn mb_or_gb(bytes: u64) -> String {
+    let mb = bytes as f64 / 1_048_576.;
+    if mb >= 1024. { format!("{:.1} GB", mb / 1024.) } else { format!("{mb:.0} MB") }
+}
+
 fn save_cfg(this: &Muralist) {
     if let Err(e) = this.cfg.save() {
         eprintln!("saving config: {e:#}");
@@ -835,11 +841,13 @@ impl Muralist {
                 vec![
                     row(
                         "Cache",
-                        format!(
-                            "{:.1} MB of thumbnails and previews in {}",
-                            self.cache_size as f64 / 1_048_576.0,
-                            cache_dir().display()
-                        ),
+                        {
+                            let used = mb_or_gb(self.cache_size);
+                            match self.cfg.cache_limit_mb {
+                                0 => format!("{used} of thumbnails and originals, no limit"),
+                                mb => format!("{used} of {}  ·  least recently used goes first", mb_or_gb(mb as u64 * 1_048_576)),
+                            }
+                        },
                         kit::Btn::new("settings-clear-cache")
                             .label("Clear")
                             .icon("trash")
@@ -849,6 +857,28 @@ impl Muralist {
                         p,
                     )
                     .into_any_element(),
+                    {
+                        let limit = self.cfg.cache_limit_mb;
+                        let opt_seg = |id: &'static str, label: &'static str, mb: u32| {
+                            segment(id, label, limit == mb, p).on_click(cx.listener(move |this, _, _, cx| {
+                                this.cfg.cache_limit_mb = mb;
+                                save_cfg(this);
+                                this.sweep_cache_now(cx);
+                                cx.notify();
+                            }))
+                        };
+                        row(
+                            "Cache limit",
+                            "Older thumbnails and cached originals are removed past this.",
+                            segmented_track(p)
+                                .child(opt_seg("cache-512", "512 MB", 512))
+                                .child(opt_seg("cache-1g", "1 GB", 1024))
+                                .child(opt_seg("cache-2g", "2 GB", 2048))
+                                .child(opt_seg("cache-5g", "5 GB", 5120)),
+                            p,
+                        )
+                        .into_any_element()
+                    },
                 ],
                 p,
             )

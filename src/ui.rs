@@ -1257,6 +1257,7 @@ impl Muralist {
         this.restore_filters();
         this.refresh_library();
         this.start_rotation_clock(cx);
+        this.start_cache_janitor(cx);
         this.resume_galleries(cx);
         if this.client.has_key() {
             this.load_account(cx);
@@ -1640,7 +1641,7 @@ impl Muralist {
             None => {}
         }
         let cached = remote_cache_path(&full_key(w), &w.path);
-        if cached.is_file() {
+        if let Some(cached) = crate::thumbs::reuse(&cached) {
             self.full.insert(w.id.clone(), FullState::Ready(cached.clone()));
             return Some(cached);
         }
@@ -3763,6 +3764,51 @@ impl Muralist {
                 head
             }
         }
+    }
+
+    /// Keeps the cache under its limit: a sweep shortly after start, then
+    /// every ten minutes.
+    fn start_cache_janitor(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let mut wait = std::time::Duration::from_secs(15);
+            loop {
+                cx.background_executor().timer(wait).await;
+                wait = std::time::Duration::from_secs(600);
+                let Ok(job) = this.update(cx, |this, _| this.cache_sweep_job()) else { break };
+                if let Some((budget, keep)) = job {
+                    cx.background_executor().spawn(async move { crate::thumbs::sweep(budget, &keep) }).await;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// The cache budget, and what's on screen this session (never swept).
+    fn cache_sweep_job(&self) -> Option<(u64, HashSet<PathBuf>)> {
+        let mb = self.cfg.cache_limit_mb;
+        if mb == 0 {
+            return None;
+        }
+        let mut keep: HashSet<PathBuf> = self.thumbs.values().cloned().collect();
+        keep.extend(self.full.values().filter_map(|f| match f {
+            FullState::Ready(p) => Some(p.clone()),
+            _ => None,
+        }));
+        Some((mb as u64 * 1_048_576, keep))
+    }
+
+    /// Sweeps now, then refreshes the size Settings shows.
+    fn sweep_cache_now(&mut self, cx: &mut Context<Self>) {
+        let Some((budget, keep)) = self.cache_sweep_job() else { return };
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().spawn(async move { crate::thumbs::sweep(budget, &keep) }).await;
+            this.update(cx, |this, cx| {
+                this.cache_size = dir_size(&cache_dir());
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Content width inside the inspector.
