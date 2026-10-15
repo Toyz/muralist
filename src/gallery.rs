@@ -203,17 +203,23 @@ pub struct Galleries {
     pub list: Vec<Gallery>,
 }
 
+/// Format history: 0, unversioned; 1, versioned, purities and categories
+/// typed (same words on disk).
+impl crate::store::Versioned for Galleries {
+    const VERSION: u32 = 1;
+}
+
 impl Galleries {
     fn path() -> PathBuf {
         config_dir().join("galleries.json")
     }
 
     pub fn load() -> Self {
-        crate::store::load_json(&Self::path())
+        crate::store::load_versioned(&Self::path())
     }
 
     pub fn save(&self) -> Result<()> {
-        crate::store::save_json(&Self::path(), self)
+        crate::store::save_versioned(&Self::path(), self)
     }
 
     pub fn get(&self, id: u64) -> Option<&Gallery> {

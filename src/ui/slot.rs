@@ -258,8 +258,8 @@ mod tests {
         let outcome = Wallpaper {
             id: "x".into(),
             url: String::new(),
-            purity: "sfw".into(),
-            category: "general".into(),
+            purity: crate::wallhaven::Purity::Sfw,
+            category: crate::wallhaven::Category::General,
             resolution: "1920x1080".into(),
             file_size: 0,
             favorites: 0,

@@ -8,8 +8,8 @@ use gpui_kit::*;
 
 use super::galleries::entry_of;
 use super::{
-    Item, Muralist, Placement, box_ratio, boxed, file_name, glass, gridmodes, icon, pal, purity_color, purity_label,
-    radius, with_alpha,
+    Item, Muralist, Placement, box_ratio, boxed, file_name, glass, gridmodes, icon, pal, purity_color, radius,
+    with_alpha,
 };
 use crate::gallery::Source;
 
@@ -459,7 +459,7 @@ impl Muralist {
 
         let (title, chips): (String, Vec<AnyElement>) = match &item {
             Item::Remote(w) => {
-                let pc = purity_color(&w.purity);
+                let pc = purity_color(w.purity);
                 (
                     w.id.clone(),
                     vec![
@@ -470,7 +470,7 @@ impl Muralist {
                             .bg(with_alpha(pc, 0.3))
                             .text_color(pc)
                             .child(div().size(px(5.)).rounded_full().bg(pc))
-                            .child(purity_label(&w.purity))
+                            .child(w.purity.label())
                             .into_any_element(),
                         div().child(w.resolution.clone()).into_any_element(),
                     ],

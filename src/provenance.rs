@@ -40,10 +40,16 @@ fn path() -> PathBuf {
     config_dir().join("provenance.json")
 }
 
+/// Format history: 0, unversioned; 1, versioned, purities and categories
+/// typed (same words on disk).
+impl crate::store::Versioned for Provenance {
+    const VERSION: u32 = 1;
+}
+
 /// Runs `f` on the store, loading it on first use.
 fn with_store<R>(f: impl FnOnce(&mut Provenance) -> R) -> R {
     let mut store = STORE.lock().unwrap_or_else(PoisonError::into_inner);
-    f(store.get_or_insert_with(|| crate::store::load_json(&path())))
+    f(store.get_or_insert_with(|| crate::store::load_versioned(&path())))
 }
 
 impl Provenance {
@@ -78,7 +84,7 @@ pub fn set_tags(id: &str, tags: &[Tag]) -> Result<Option<Record>> {
             _ => return Ok(None),
         }
         let r = p.records[id].clone();
-        crate::store::save_json(&path(), p)?;
+        crate::store::save_versioned(&path(), p)?;
         Ok(Some(r))
     })
 }
@@ -95,7 +101,7 @@ fn record(w: &Wallpaper, tags: Option<Vec<Tag>>) -> Result<Record> {
             r.tags = tags;
         }
         let r = r.clone();
-        crate::store::save_json(&path(), p)?;
+        crate::store::save_versioned(&path(), p)?;
         Ok(r)
     })
 }

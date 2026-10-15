@@ -11,7 +11,7 @@ use gpui_kit::*;
 
 use super::{
     FullPhase, Item, Muralist, Placement, Tab, develop_bands, fade_in, file_name, glass, icon, kit, local_key, pal,
-    progress_line, purity_color, purity_label, radius, segment, segmented_track, with_alpha,
+    progress_line, purity_color, radius, segment, segmented_track, with_alpha,
 };
 use crate::span::{self, Framing};
 
@@ -309,7 +309,7 @@ impl Muralist {
         };
 
         let (title, purity, url) = match &item {
-            Item::Remote(w) => (format!("wallhaven-{}", w.id), Some(w.purity.clone()), Some(w.url.clone())),
+            Item::Remote(w) => (format!("wallhaven-{}", w.id), Some(w.purity), Some(w.url.clone())),
             Item::Local(path) => (file_name(path), None, None),
         };
         let more_pages = self.tab == Tab::Discover && self.page < self.last_page;
@@ -320,7 +320,7 @@ impl Muralist {
             .child(div().font_weight(FontWeight::SEMIBOLD).text_color(white()).mr_1().child(title))
             .children(dims.map(|(w, h)| chip(format!("{w}x{h}"))))
             .when_some(purity, |d, purity| {
-                let c = purity_color(&purity);
+                let c = purity_color(purity);
                 d.child(
                     h_flex()
                         .gap_1()
@@ -331,7 +331,7 @@ impl Muralist {
                         .text_xs()
                         .text_color(c)
                         .child(div().size(px(6.)).rounded_full().bg(c))
-                        .child(purity_label(&purity)),
+                        .child(purity.label()),
                 )
             })
             .children(counter.map(chip));

@@ -158,7 +158,7 @@ impl Muralist {
             smartq::Scope::Tag(id) => match self.tag_label(*id, cx) {
                 // The tag's purity leads: a dot in its color, then its name.
                 Some(t) => {
-                    let c = super::purity_color(&t.purity);
+                    let c = super::purity_color(t.purity);
                     let lead = h_flex()
                         .gap_1()
                         .child(icon("book-open").size_3().text_color(c))
@@ -172,7 +172,7 @@ impl Muralist {
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(c)
                                 .child(div().size(px(5.)).rounded_full().bg(c))
-                                .child(super::purity_label(&t.purity)),
+                                .child(t.purity.label()),
                         )
                         .into_any_element();
                     (lead, t.name, (!t.category.is_empty()).then_some(t.category))
@@ -266,7 +266,7 @@ impl Muralist {
             let mut lead: AnyElement = icon("asterisk").size_3().text_color(p.muted).into_any_element();
             if let Some(id) = lower.strip_prefix("id:").and_then(|v| v.parse::<u64>().ok()) {
                 let tag = self.tag_label(id, cx);
-                let tint = tag.as_ref().map_or(p.accent, |t| super::purity_color(&t.purity));
+                let tint = tag.as_ref().map_or(p.accent, |t| super::purity_color(t.purity));
                 match tag {
                     Some(t) => {
                         label = t.name;
@@ -299,7 +299,7 @@ impl Muralist {
                 ChipKind::Color => ("palette", None),
                 ChipKind::Ratio => ("frame", None),
                 ChipKind::Resolution => ("maximize", None),
-                ChipKind::Purity => ("eye", Some(super::purity_color(&chip.label))),
+                ChipKind::Purity => ("eye", crate::wallhaven::Purity::parse(&chip.label).map(super::purity_color)),
                 ChipKind::Category => ("folder", None),
                 ChipKind::Sort => ("sort-descending", None),
                 ChipKind::Operator => ("asterisk", None),

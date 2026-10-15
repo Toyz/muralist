@@ -14,7 +14,7 @@ use gpui_kit::*;
 
 use super::{
     InspectorTab, Item, Muralist, boxed, compact_count, details, develop, file_name, glass, headers, icon, kit, lerp,
-    pal, parse_hex, purity_color, purity_label, radius, with_alpha,
+    pal, parse_hex, purity_color, radius, with_alpha,
 };
 
 const SHEET_W: f32 = 1100.;
@@ -365,7 +365,7 @@ impl Muralist {
                 let mut f = vec![(w.resolution.clone(), "maximize")];
                 f.push((format!("{:.1} MB", super::mib(w.file_size)), "hard-drive"));
                 f.push((compact_count(w.favorites), "heart"));
-                f.push((w.category.clone(), "tag"));
+                f.push((w.category.label().to_owned(), "tag"));
                 f
             }
             None => vec![("saved on this machine".into(), "folder")],
@@ -385,7 +385,7 @@ impl Muralist {
                         move |d, t| d.child(headers::scrambled(&decoding, t)),
                     ))
                     .children(remote.as_ref().map(|w| {
-                        let pc = purity_color(&w.purity);
+                        let pc = purity_color(w.purity);
                         h_flex()
                             .gap_1()
                             .px_2()
@@ -395,7 +395,7 @@ impl Muralist {
                             .text_xs()
                             .text_color(pc)
                             .child(div().size(px(6.)).rounded_full().bg(pc))
-                            .child(purity_label(&w.purity))
+                            .child(w.purity.label())
                     }))
                     .child(div().flex_1())
                     .children(facts.into_iter().map(|(v, i)| {
@@ -695,7 +695,7 @@ impl Muralist {
                 .enumerate()
                 .map(|(i, (m, sw))| {
                     let thumb = self.remote_thumb(sw, false);
-                    let pc = purity_color(&sw.purity);
+                    let pc = purity_color(sw.purity);
                     let theirs = hexes(&sw.colors);
                     let hovered = self.sheet_compare == Some(i);
                     let item = Item::Remote(sw.clone());

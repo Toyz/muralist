@@ -13,11 +13,9 @@ use super::{
     with_alpha,
 };
 use crate::gallery::{SavedSearch, Source};
-use crate::wallhaven::{Sorting, TOP_RANGES};
+use crate::wallhaven::{Purity, Sorting, TOP_RANGES};
 
 pub(super) const LIMITS: [u32; 4] = [24, 48, 96, 192];
-const PURITY_LABELS: [&str; 3] = ["SFW", "Sketchy", "NSFW"];
-const PURITY_KEYS: [&str; 3] = ["sfw", "sketchy", "nsfw"];
 const CATEGORY_LABELS: [&str; 3] = ["General", "Anime", "People"];
 
 /// Flips one of a set of switches, but never the last one left on: a
@@ -130,13 +128,12 @@ impl Muralist {
             Source::Smart { search, limit } => {
                 let purity = search.purity;
                 let purity_opts = (0..3).filter(|i| *i != 2 || has_key).map(|i| {
-                    opt(("ge-purity", i), PURITY_LABELS[i], purity[i], Some(purity_color(PURITY_KEYS[i])), p).on_click(
-                        cx.listener(move |this, _, _, cx| {
+                    opt(("ge-purity", i), Purity::ALL[i].label(), purity[i], Some(purity_color(Purity::ALL[i])), p)
+                        .on_click(cx.listener(move |this, _, _, cx| {
                             this.edit_search(cx, |s, _| {
                                 toggle_keeping_one(&mut s.purity, i);
                             });
-                        }),
-                    )
+                        }))
                 });
                 let categories = search.categories;
                 let category_opts = (0..3).map(|i| {
@@ -210,7 +207,7 @@ impl Muralist {
             Source::Wallhaven { purity, .. } => {
                 let current = purity.unwrap_or(self.purity);
                 let purity_opts = (0..3).filter(|i| *i != 2 || has_key).map(|i| {
-                    opt(("ge-wpurity", i), PURITY_LABELS[i], current[i], Some(purity_color(PURITY_KEYS[i])), p)
+                    opt(("ge-wpurity", i), Purity::ALL[i].label(), current[i], Some(purity_color(Purity::ALL[i])), p)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if let Some(GalleryDraft { source: Source::Wallhaven { purity, .. }, .. }) =
                                 &mut this.gallery_edit

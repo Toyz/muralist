@@ -302,11 +302,11 @@ impl Muralist {
                                 eprintln!("saving config: {e:#}");
                             }
                         }
-                        this.applied.record("desktop", &map);
+                        this.applied.record(crate::config::Surface::Desktop, &map);
                         this.applied.desktop = map.clone();
                         this.desktop = map.clone();
                         if with_lock {
-                            this.applied.record("lock", &map);
+                            this.applied.record(crate::config::Surface::Lock, &map);
                             this.applied.lock = map.clone();
                             this.lock = map;
                         }

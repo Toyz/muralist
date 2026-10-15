@@ -160,9 +160,9 @@ impl Muralist {
         if let Some(purity) = purity_of(&g.source, self.purity) {
             let fallback = self.purity;
             let row = (0..3).filter(|i| *i != 2 || has_key).map(|i| {
-                let key = ["sfw", "sketchy", "nsfw"][i];
-                chip(("pop-purity", i).into(), ["SFW", "Sketchy", "NSFW"][i].into(), purity[i], Some(purity_color(key)))
-                    .on_click(cx.listener(move |this, _, _, cx| {
+                let k = crate::wallhaven::Purity::ALL[i];
+                chip(("pop-purity", i).into(), k.label().into(), purity[i], Some(purity_color(k))).on_click(
+                    cx.listener(move |this, _, _, cx| {
                         this.pop_source(|s| {
                             let flip = |mut v: [bool; 3]| {
                                 super::gallery_edit::toggle_keeping_one(&mut v, i);
@@ -175,7 +175,8 @@ impl Muralist {
                             }
                         });
                         cx.notify();
-                    }))
+                    }),
+                )
             });
             filters = filters.child(v_flex().gap_1p5().child(label("Purity")).child(h_flex().gap_1p5().children(row)));
         }

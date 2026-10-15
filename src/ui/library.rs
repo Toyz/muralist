@@ -14,10 +14,9 @@ use gpui_kit::component::{Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::{
-    Item, Muralist, Pal, icon, kit, opt, opt_grid, pal, purity_color, purity_label, side_card_with, with_alpha,
-};
+use super::{Item, Muralist, Pal, icon, kit, opt, opt_grid, pal, purity_color, side_card_with, with_alpha};
 use crate::provenance::wallhaven_id;
+use crate::wallhaven::{Category, Purity};
 
 /// Tags each category shows before its "+N".
 const TAGS_PER_GROUP: usize = 6;
@@ -30,8 +29,8 @@ const DEAL: Duration = Duration::from_millis(900);
 
 #[derive(Default)]
 pub(super) struct LibFilter {
-    pub purity: BTreeSet<String>,
-    pub category: BTreeSet<String>,
+    pub purity: BTreeSet<Purity>,
+    pub category: BTreeSet<Category>,
     /// Picked tags, in the order they were picked (for the funnel).
     pub tags: Vec<u64>,
     /// Tag categories expanded past their first few.
@@ -62,16 +61,9 @@ pub(super) enum Scan {
 /// One stage of the funnel.
 #[derive(Clone)]
 enum Stage {
-    Purity(String),
-    Category(String),
+    Purity(Purity),
+    Category(Category),
     Tag(u64),
-}
-
-const PURITIES: [(&str, &str); 3] = [("sfw", "SFW"), ("sketchy", "Sketchy"), ("nsfw", "NSFW")];
-const CATEGORIES: [(&str, &str); 3] = [("general", "General"), ("anime", "Anime"), ("people", "People")];
-
-fn category_label(c: &str) -> &'static str {
-    CATEGORIES.iter().find(|(k, _)| *k == c).map_or("?", |(_, l)| l)
 }
 
 impl Muralist {
@@ -120,8 +112,8 @@ impl Muralist {
         let f = &self.lib_filter;
         f.purity
             .iter()
-            .map(|p| Stage::Purity(p.clone()))
-            .chain(f.category.iter().map(|c| Stage::Category(c.clone())))
+            .map(|p| Stage::Purity(*p))
+            .chain(f.category.iter().map(|c| Stage::Category(*c)))
             .chain(f.tags.iter().map(|&id| Stage::Tag(id)))
             .collect()
     }
@@ -249,7 +241,7 @@ impl Muralist {
             Scan::Landed(at) => {
                 let Item::Local(path) = item else { return Vec::new() };
                 let Some(r) = self.provenance.of(path) else { return Vec::new() };
-                let c = purity_color(&r.wallpaper.purity);
+                let c = purity_color(r.wallpaper.purity);
                 let tags: Vec<String> = r.tags.iter().flatten().take(3).map(|t| t.name.clone()).collect();
                 let seed = format!("{key}-{}", at.elapsed().as_millis() / 100_000);
                 let mut layers = edge_draw(c, w, h, &seed);
@@ -316,8 +308,8 @@ impl Muralist {
         ));
         for (i, (stage, n)) in stages.into_iter().zip(counts).enumerate() {
             let (label, tint) = match &stage {
-                Stage::Purity(pu) => (purity_label(pu).to_owned(), Some(purity_color(pu))),
-                Stage::Category(c) => (category_label(c).to_owned(), None),
+                Stage::Purity(pu) => (pu.label().to_owned(), Some(purity_color(*pu))),
+                Stage::Category(c) => (c.label().to_owned(), None),
                 Stage::Tag(id) => (format!("#{}", self.lib_tag_name(*id)), None),
             };
             let remove = stage.clone();
@@ -367,58 +359,53 @@ impl Muralist {
     pub(super) fn render_library_side(&mut self, cx: &mut Context<Self>) -> Div {
         let p = pal();
         // Counted every frame, so borrowed rather than copied.
-        let mut purity_n: HashMap<&str, usize> = HashMap::new();
-        let mut category_n: HashMap<&str, usize> = HashMap::new();
+        let mut purity_n: HashMap<Purity, usize> = HashMap::new();
+        let mut category_n: HashMap<Category, usize> = HashMap::new();
         // Tag id -> (name, its own purity, count), grouped by tag category.
-        let mut groups: BTreeMap<&str, HashMap<u64, (&str, &str, usize)>> = BTreeMap::new();
+        let mut groups: BTreeMap<&str, HashMap<u64, (&str, Purity, usize)>> = BTreeMap::new();
         let mut known = 0;
         for path in &self.library {
             let Some(r) = self.provenance.of(path) else { continue };
             known += 1;
-            *purity_n.entry(&r.wallpaper.purity).or_default() += 1;
-            *category_n.entry(&r.wallpaper.category).or_default() += 1;
+            *purity_n.entry(r.wallpaper.purity).or_default() += 1;
+            *category_n.entry(r.wallpaper.category).or_default() += 1;
             for t in r.tags.iter().flatten() {
                 let cat = if t.category.is_empty() { "Other" } else { &t.category };
-                groups.entry(cat).or_default().entry(t.id).or_insert((&t.name, &t.purity, 0)).2 += 1;
+                groups.entry(cat).or_default().entry(t.id).or_insert((&t.name, t.purity, 0)).2 += 1;
             }
         }
         let unknown = self.library.len() - known;
         let active = self.lib_filter.active();
         let generation_n = self.lib_filter.generation;
 
-        let purities: Vec<_> = PURITIES
-            .iter()
-            .enumerate()
-            .filter(|(_, (k, _))| purity_n.contains_key(*k))
-            .map(|(ix, &(k, label))| {
-                let on = self.lib_filter.purity.contains(k);
-                let n = purity_n[k];
+        let purities: Vec<_> = Purity::ALL
+            .into_iter()
+            .filter_map(|k| Some((k, *purity_n.get(&k)?)))
+            .map(|(k, n)| {
+                let on = self.lib_filter.purity.contains(&k);
                 pop(
-                    opt(("lib-purity", ix), format!("{label}  {n}"), on, Some(purity_color(k)), p).on_click(
-                        cx.listener(move |this, _, _, cx| {
-                            if !this.lib_filter.purity.remove(k) {
-                                this.lib_filter.purity.insert(k.to_owned());
+                    opt(("lib-purity", k.index()), format!("{}  {n}", k.label()), on, Some(purity_color(k)), p)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if !this.lib_filter.purity.remove(&k) {
+                                this.lib_filter.purity.insert(k);
                             }
                             this.touch_filter(cx);
-                        }),
-                    ),
+                        })),
                     on,
                     format!("pp-{k}-{generation_n}"),
                 )
             })
             .collect();
-        let categories: Vec<_> = CATEGORIES
-            .iter()
-            .enumerate()
-            .filter(|(_, (k, _))| category_n.contains_key(*k))
-            .map(|(ix, &(k, label))| {
-                let on = self.lib_filter.category.contains(k);
-                let n = category_n[k];
+        let categories: Vec<_> = Category::ALL
+            .into_iter()
+            .filter_map(|k| Some((k, *category_n.get(&k)?)))
+            .map(|(k, n)| {
+                let on = self.lib_filter.category.contains(&k);
                 pop(
-                    opt(("lib-cat", ix), format!("{label}  {n}"), on, None, p).on_click(cx.listener(
+                    opt(("lib-cat", k.index()), format!("{}  {n}", k.label()), on, None, p).on_click(cx.listener(
                         move |this, _, _, cx| {
-                            if !this.lib_filter.category.remove(k) {
-                                this.lib_filter.category.insert(k.to_owned());
+                            if !this.lib_filter.category.remove(&k) {
+                                this.lib_filter.category.insert(k);
                             }
                             this.touch_filter(cx);
                         },
@@ -433,7 +420,7 @@ impl Muralist {
         let query = self.lib_tag_query.read(cx).value().trim().to_lowercase();
         let hide = self.cfg.spoiler;
         let picked = self.lib_filter.tags.clone();
-        let mut grouped: Vec<(&str, Vec<(u64, &str, &str, usize)>)> = groups
+        let mut grouped: Vec<(&str, Vec<(u64, &str, Purity, usize)>)> = groups
             .into_iter()
             .map(|(cat, tags)| {
                 let mut v: Vec<_> = tags
@@ -614,8 +601,8 @@ fn funnel_step(
 
 /// A tag chip: its own purity as a dot and tinted edge, masked behind the
 /// spoiler setting until hovered, like the cards it belongs to.
-fn tag_chip(id: u64, name: &str, purity: &str, n: usize, on: bool, masked: bool, p: Pal) -> Stateful<Div> {
-    let tint = (purity != "sfw").then(|| purity_color(purity));
+fn tag_chip(id: u64, name: &str, purity: Purity, n: usize, on: bool, masked: bool, p: Pal) -> Stateful<Div> {
+    let tint = (purity != Purity::Sfw).then(|| purity_color(purity));
     let group = SharedString::from(format!("tag-{id}"));
     let label = if masked {
         div()

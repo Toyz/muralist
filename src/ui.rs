@@ -49,7 +49,9 @@ use crate::gallery::{self as gallery_entry, Galleries};
 use crate::monitors::Monitor;
 use crate::span;
 use crate::thumbs::{Job, ThumbPool, remote_cache_path};
-use crate::wallhaven::{Client, Progress, SearchParams, Sorting, TOP_RANGES, UserSettings, Wallpaper, WallpaperInfo};
+use crate::wallhaven::{
+    Client, Progress, Purity, SearchParams, Sorting, TOP_RANGES, UserSettings, Wallpaper, WallpaperInfo,
+};
 
 /// Default panel widths, and how far they can be dragged.
 const SIDEBAR_W: f32 = 264.;
@@ -163,19 +165,11 @@ fn pal() -> Pal {
     adaptive::current()
 }
 
-fn purity_color(purity: &str) -> Hsla {
+fn purity_color(purity: Purity) -> Hsla {
     match purity {
-        "sfw" | "SFW" => hex(0x22c55e),
-        "sketchy" | "Sketchy" => hex(0xf59e0b),
-        _ => hex(0xef4444),
-    }
-}
-
-fn purity_label(purity: &str) -> &'static str {
-    match purity {
-        "sfw" => "SFW",
-        "sketchy" => "Sketchy",
-        _ => "NSFW",
+        Purity::Sfw => hex(0x22c55e),
+        Purity::Sketchy => hex(0xf59e0b),
+        Purity::Nsfw => hex(0xef4444),
     }
 }
 
@@ -2342,11 +2336,11 @@ impl Muralist {
                         for (target, images) in done {
                             match target {
                                 Target::Desktop => {
-                                    this.applied.record("desktop", &images);
+                                    this.applied.record(crate::config::Surface::Desktop, &images);
                                     this.applied.desktop = images;
                                 }
                                 Target::Lock => {
-                                    this.applied.record("lock", &images);
+                                    this.applied.record(crate::config::Surface::Lock, &images);
                                     this.applied.lock = images;
                                 }
                             }
@@ -2407,7 +2401,7 @@ impl Muralist {
             .history
             .iter()
             .rev()
-            .find(|e| e.target == "desktop")
+            .find(|e| e.target == crate::config::Surface::Desktop)
             .map(|e| self.monitors.iter().filter_map(|m| e.images.get(&m.name).cloned()).take(3).collect())
             .unwrap_or_default();
         let history: Vec<PathBuf> = last_set.iter().filter_map(|path| self.local_thumb(path)).collect();
@@ -2711,15 +2705,12 @@ impl Muralist {
                 .enumerate()
                 .filter(|(i, _)| *i != 2 || has_key)
                 .map(|(i, &label)| {
-                    opt(("purity", i), label, self.purity[i], Some(purity_color(label)), p).on_click(cx.listener(
-                        move |this, _, _, cx| {
-                            this.purity[i] = !this.purity[i];
-                            if !this.purity.iter().any(|b| *b) {
-                                this.purity[i] = true;
-                            }
+                    opt(("purity", i), label, self.purity[i], Some(purity_color(Purity::ALL[i])), p).on_click(
+                        cx.listener(move |this, _, _, cx| {
+                            gallery_edit::toggle_keeping_one(&mut this.purity, i);
                             this.search(true, cx);
-                        },
-                    ))
+                        }),
+                    )
                 })
                 .collect();
             let purity_cols = purities.len() as u16;
@@ -2729,7 +2720,7 @@ impl Muralist {
                     .iter()
                     .enumerate()
                     .filter(|(i, _)| self.purity[*i])
-                    .map(|(_, &label)| div().size(px(7.)).rounded_full().bg(purity_color(label))),
+                    .map(|(i, _)| div().size(px(7.)).rounded_full().bg(purity_color(Purity::ALL[i]))),
             );
             let on_cats: Vec<&str> =
                 CATEGORIES.iter().enumerate().filter(|(i, _)| self.categories[*i]).map(|(_, &c)| c).collect();
@@ -3097,10 +3088,10 @@ impl Muralist {
             (Some(Item::Local(a)), Item::Local(b)) => a == b,
             _ => false,
         };
-        let purity: Option<String> = match &item {
-            Item::Remote(wp) => Some(wp.purity.clone()),
+        let purity: Option<Purity> = match &item {
+            Item::Remote(wp) => Some(wp.purity),
             // Saved files keep the purity they were downloaded with.
-            Item::Local(path) => self.provenance.of(path).map(|r| r.wallpaper.purity.clone()),
+            Item::Local(path) => self.provenance.of(path).map(|r| r.wallpaper.purity),
         };
         // Placeholder in the wallpaper's own dominant color, dimmed.
         let placeholder_bg = match &item {
@@ -3143,7 +3134,7 @@ impl Muralist {
         let drag_thumb = thumb.clone();
 
         // Spoilers: a pixel mosaic until hovered.
-        let spoiler = purity.as_deref().is_some_and(|pu| self.cfg.spoiler.hides(pu)) && !selected;
+        let spoiler = purity.is_some_and(|pu| self.cfg.spoiler.hides(pu)) && !selected;
         let mosaic = match (&thumb, spoiler) {
             (Some(t), true) => {
                 let src = t.clone();
@@ -3158,7 +3149,7 @@ impl Muralist {
 
         // The picture sits inside the card's border, so its box is the card
         // less the border on each side; pin that ratio exactly.
-        let border = if !selected && purity.as_deref() == Some("sfw") { 1. } else { 2. };
+        let border = if !selected && purity == Some(Purity::Sfw) { 1. } else { 2. };
         let (iw, ih) = (w - border * 2., h - border * 2.);
         let image: AnyElement = match (&thumb, hide) {
             (_, true) => match mosaic {
@@ -3200,13 +3191,13 @@ impl Muralist {
             .bg(placeholder_bg)
             // Purity reads from the edge itself: thin for SFW, dashed for
             // Sketchy, heavy (and breathing, below) for NSFW.
-            .map(|d| match (selected, purity.as_deref()) {
+            .map(|d| match (selected, purity) {
                 (true, _) => d.border_2().border_color(p.accent).shadow_lg(),
-                (false, Some("sfw")) => d.border_1().border_color(with_alpha(purity_color("sfw"), 0.5)),
-                (false, Some("sketchy")) => {
-                    d.border_2().border_dashed().border_color(with_alpha(purity_color("sketchy"), 0.85))
+                (false, Some(Purity::Sfw)) => d.border_1().border_color(with_alpha(purity_color(Purity::Sfw), 0.5)),
+                (false, Some(Purity::Sketchy)) => {
+                    d.border_2().border_dashed().border_color(with_alpha(purity_color(Purity::Sketchy), 0.85))
                 }
-                (false, Some(_)) => d.border_2().border_color(with_alpha(purity_color("nsfw"), 0.75)),
+                (false, Some(Purity::Nsfw)) => d.border_2().border_color(with_alpha(purity_color(Purity::Nsfw), 0.75)),
                 (false, None) => {
                     d.border_2().border_color(with_alpha(p.border, 0.)).hover(move |s| s.border_color(p.border_strong))
                 }
@@ -3259,7 +3250,7 @@ impl Muralist {
             )
             // Purity tab hanging from the top edge, like a folder tab.
             .when_some(purity.clone(), |d, purity| {
-                let c = purity_color(&purity);
+                let c = purity_color(purity);
                 d.child(
                     h_flex()
                         .absolute()
@@ -3274,7 +3265,7 @@ impl Muralist {
                         .text_xs()
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(on_accent(c))
-                        .child(purity_label(&purity)),
+                        .child(purity.label()),
                 )
             })
             .when_some(holo.filter(|_| !hide).map(|(rx, ry)| (rx, ry, colors.clone())), |d, (rx, ry, colors)| {
@@ -3317,8 +3308,8 @@ impl Muralist {
 
         // Animated edges: on hover the edge flows between the purity color
         // and the image's own; at rest, NSFW edges breathe slowly.
-        let edge = purity.as_deref().map(purity_color);
-        let out = match (selected, edge, hovered, purity.as_deref()) {
+        let edge = purity.map(purity_color);
+        let out = match (selected, edge, hovered, purity) {
             (false, Some(c), true, _) => {
                 let own = glass::glow_color(&colors).unwrap_or(c);
                 card.with_animation(
@@ -3331,7 +3322,7 @@ impl Muralist {
                 )
                 .into_any_element()
             }
-            (false, Some(c), false, Some("nsfw")) => card
+            (false, Some(c), false, Some(Purity::Nsfw)) => card
                 .with_animation(
                     SharedString::from(format!("edge-breathe-{card_key}")),
                     Animation::new(std::time::Duration::from_millis(2400))
@@ -4049,7 +4040,7 @@ impl Muralist {
                 )
                 .into_any_element(),
             Item::Remote(w) => {
-                let pc = purity_color(&w.purity);
+                let pc = purity_color(w.purity);
 
                 v_flex()
                     .gap_3()
@@ -4068,9 +4059,9 @@ impl Muralist {
                                     .text_xs()
                                     .text_color(pc)
                                     .child(div().size(px(6.)).rounded_full().bg(pc))
-                                    .child(purity_label(&w.purity)),
+                                    .child(w.purity.label()),
                             )
-                            .child(div().text_xs().text_color(p.dim).child(w.category.clone()))
+                            .child(div().text_xs().text_color(p.dim).child(w.category.label()))
                             .child(div().flex_1())
                             .child(
                                 h_flex()

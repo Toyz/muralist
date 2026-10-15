@@ -11,6 +11,7 @@ use gpui_kit::*;
 
 use super::glass::{delayed, ease_out_cubic};
 use super::{Muralist, boxed, glass, icon, pal, purity_color, section, with_alpha};
+use crate::wallhaven::Purity;
 use crate::wallhaven::Wallpaper;
 
 /// Which way the lab looks at the fit.
@@ -91,7 +92,7 @@ impl Signals {
         let p = pal();
         Self {
             ok: in_light(p.ok, light),
-            caution: in_light(purity_color("sketchy"), light),
+            caution: in_light(purity_color(Purity::Sketchy), light),
             bad: in_light(p.error, light),
         }
     }

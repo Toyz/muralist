@@ -12,8 +12,8 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::{
-    KeyTest, Muralist, Pal, Reach, dir_size, hex, icon, kit, opt, opt_grid, pal, purity_label, segment,
-    segmented_track, switch, with_alpha,
+    KeyTest, Muralist, Pal, Reach, dir_size, hex, icon, kit, opt, opt_grid, pal, segment, segmented_track, switch,
+    with_alpha,
 };
 use crate::config::{LockMode, RotateOrder, RotateSource, Spoiler, cache_dir};
 use crate::wallhaven::Client;
@@ -176,7 +176,11 @@ impl Muralist {
             this.update(cx, |this, cx| {
                 this.key_test = match result {
                     Ok(s) => {
-                        let purity: Vec<&str> = s.purity.iter().map(|p| purity_label(p)).collect();
+                        let purity: Vec<&str> = s
+                            .purity
+                            .iter()
+                            .map(|p| crate::wallhaven::Purity::parse(p).map_or("?", crate::wallhaven::Purity::label))
+                            .collect();
                         KeyTest::Ok(format!("Key works  ·  account allows {}", purity.join(", ")))
                     }
                     Err(e) => KeyTest::Failed(format!("{e:#}")),
@@ -440,7 +444,11 @@ impl Muralist {
 
         let account_state = match &self.account {
             Some(s) => {
-                let purity: Vec<&str> = s.purity.iter().map(|p| purity_label(p)).collect();
+                let purity: Vec<&str> = s
+                    .purity
+                    .iter()
+                    .map(|p| crate::wallhaven::Purity::parse(p).map_or("?", crate::wallhaven::Purity::label))
+                    .collect();
                 format!("Defaults loaded  ·  allows {}", purity.join(", "))
             }
             None if self.client.has_key() => "Loading your account defaults...".into(),

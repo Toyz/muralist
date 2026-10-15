@@ -6,6 +6,8 @@
 //! stats: how many sets, desktop against lock, the longest-lived set and the
 //! colors you wear most.
 
+use crate::config::Surface;
+use crate::wallhaven::Purity;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
@@ -56,12 +58,12 @@ fn span_label(secs: i64) -> String {
 /// surface. The newest per surface has none (it may still be up).
 fn stays(history: &[HistoryEntry]) -> HashMap<usize, i64> {
     let mut out = HashMap::new();
-    let mut next_at: HashMap<&str, i64> = HashMap::new();
+    let mut next_at: HashMap<Surface, i64> = HashMap::new();
     for (ix, e) in history.iter().enumerate().rev() {
-        if let Some(n) = next_at.get(e.target.as_str()) {
+        if let Some(n) = next_at.get(&e.target) {
             out.insert(ix, n - e.at);
         }
-        next_at.insert(e.target.as_str(), e.at);
+        next_at.insert(e.target, e.at);
     }
     out
 }
@@ -181,17 +183,14 @@ impl Muralist {
     ) -> AnyElement {
         let p = pal();
         let hovered = self.history_hover == Some(ix);
-        let is_lock = entry.target == "lock";
+        let is_lock = entry.target == Surface::Lock;
         let c = self.entry_color(entry).unwrap_or(p.accent);
         let applied = if is_lock { &self.applied.lock } else { &self.applied.desktop };
         let up_now = stayed.is_none() && !entry.images.is_empty() && entry.images == *applied;
         let peeking_this = hovered && self.peek.is_some();
         let mini = self.mini_layout(&entry.images);
-        let purities: Vec<String> = entry
-            .images
-            .values()
-            .filter_map(|path| self.provenance.of(path).map(|r| r.wallpaper.purity.clone()))
-            .collect();
+        let purities: Vec<Purity> =
+            entry.images.values().filter_map(|path| self.provenance.of(path).map(|r| r.wallpaper.purity)).collect();
 
         let stay_text = match stayed {
             Some(s) => format!("stayed {}", span_label(s)),
@@ -299,7 +298,7 @@ impl Muralist {
                     )
                     .child(div().text_xs().text_color(p.muted).child(stay_text))
                     .child(h_flex().gap_1().children(
-                        purities.iter().map(|pu| div().size(px(6.)).rounded_full().bg(super::purity_color(pu))),
+                        purities.iter().map(|pu| div().size(px(6.)).rounded_full().bg(super::purity_color(*pu))),
                     )),
             )
             .child(
@@ -380,7 +379,7 @@ impl Muralist {
                 let path = images.get(&m.name).cloned();
                 let thumb = path.as_deref().and_then(|p| self.local_thumb(p));
                 // What it was when it was saved, even if it's only a span slice now.
-                let purity = path.as_deref().and_then(|p| self.provenance.of(p)).map(|r| r.wallpaper.purity.clone());
+                let purity = path.as_deref().and_then(|p| self.provenance.of(p)).map(|r| r.wallpaper.purity);
                 let (tw, th) = (m.width as f32 * scale - gap, m.height as f32 * scale - gap);
                 div()
                     .absolute()
@@ -404,7 +403,7 @@ impl Muralist {
                         ),
                         None => d,
                     })
-                    .child(div().absolute().inset_0().rounded_md().border_1().border_color(match purity.as_deref() {
+                    .child(div().absolute().inset_0().rounded_md().border_1().border_color(match purity {
                         Some(pu) => with_alpha(super::purity_color(pu), 0.75),
                         None => p.border,
                     }))
@@ -526,7 +525,7 @@ impl Muralist {
 
         // Stats.
         let total = history.len();
-        let locks = history.iter().filter(|e| e.target == "lock").count();
+        let locks = history.iter().filter(|e| e.target == Surface::Lock).count();
         let stays = stays(history);
         let longest = stays.iter().max_by_key(|(_, s)| **s).map(|(ix, s)| (*ix, *s));
         let longest_thumb =
@@ -593,7 +592,7 @@ impl Muralist {
             self.set_status("Those files are gone from disk", true, cx);
             return;
         }
-        let target = if entry.target == "lock" {
+        let target = if entry.target == Surface::Lock {
             self.lock = images;
             self.target = TargetMode::Lock;
             Target::Lock
@@ -620,7 +619,7 @@ impl Muralist {
     /// The hovered history entry's desktop images, for Space-peek.
     pub(super) fn history_peek_map(&self) -> Option<BTreeMap<String, PathBuf>> {
         let entry = self.applied.history.get(self.history_hover?)?;
-        (entry.target == "desktop")
+        (entry.target == Surface::Desktop)
             .then(|| entry.images.iter().filter(|(_, p)| p.is_file()).map(|(k, v)| (k.clone(), v.clone())).collect())
     }
 }
@@ -629,15 +628,21 @@ impl Muralist {
 mod tests {
     use super::{span_label, stays};
     use crate::config::HistoryEntry;
+    use crate::config::Surface;
     use std::collections::BTreeMap;
 
-    fn entry(at: i64, target: &str) -> HistoryEntry {
-        HistoryEntry { at, target: target.into(), images: BTreeMap::new() }
+    fn entry(at: i64, target: Surface) -> HistoryEntry {
+        HistoryEntry { at, target, images: BTreeMap::new() }
     }
 
     #[test]
     fn a_set_stays_until_the_next_one_for_the_same_surface() {
-        let h = [entry(0, "desktop"), entry(100, "lock"), entry(600, "desktop"), entry(4000, "desktop")];
+        let h = [
+            entry(0, Surface::Desktop),
+            entry(100, Surface::Lock),
+            entry(600, Surface::Desktop),
+            entry(4000, Surface::Desktop),
+        ];
         let s = stays(&h);
         assert_eq!(s.get(&0), Some(&600));
         assert_eq!(s.get(&2), Some(&3400));

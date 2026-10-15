@@ -13,6 +13,125 @@ use serde::{Deserialize, Serialize};
 
 const BASE: &str = "https://wallhaven.cc/api/v1";
 
+/// How explicit a wallpaper (or a tag) is, as Wallhaven rates it. Stored
+/// and sent as Wallhaven's own words ("sfw", "sketchy", "nsfw"), so files
+/// written before this was a type read the same. Anything unrecognised is
+/// taken as NSFW: hidden unless NSFW is allowed, never shown by mistake.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize)]
+#[serde(from = "String", into = "&'static str")]
+pub enum Purity {
+    #[default]
+    Sfw,
+    Sketchy,
+    Nsfw,
+}
+
+impl Purity {
+    pub const ALL: [Purity; 3] = [Purity::Sfw, Purity::Sketchy, Purity::Nsfw];
+
+    /// Wallhaven's word for it.
+    pub const fn key(self) -> &'static str {
+        match self {
+            Purity::Sfw => "sfw",
+            Purity::Sketchy => "sketchy",
+            Purity::Nsfw => "nsfw",
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Purity::Sfw => "SFW",
+            Purity::Sketchy => "Sketchy",
+            Purity::Nsfw => "NSFW",
+        }
+    }
+
+    /// Its position in Wallhaven's purity bit flags.
+    pub const fn index(self) -> usize {
+        self as usize
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|p| p.key().eq_ignore_ascii_case(s) || p.label().eq_ignore_ascii_case(s))
+    }
+}
+
+impl From<String> for Purity {
+    fn from(s: String) -> Self {
+        Self::parse(&s).unwrap_or(Purity::Nsfw)
+    }
+}
+
+impl From<Purity> for &'static str {
+    fn from(p: Purity) -> Self {
+        p.key()
+    }
+}
+
+impl std::fmt::Display for Purity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.key())
+    }
+}
+
+/// What a wallpaper shows, as Wallhaven files it. Stored as its own words;
+/// anything unrecognised counts as general.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize)]
+#[serde(from = "String", into = "&'static str")]
+pub enum Category {
+    #[default]
+    General,
+    Anime,
+    People,
+}
+
+impl Category {
+    pub const ALL: [Category; 3] = [Category::General, Category::Anime, Category::People];
+
+    pub const fn key(self) -> &'static str {
+        match self {
+            Category::General => "general",
+            Category::Anime => "anime",
+            Category::People => "people",
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Category::General => "General",
+            Category::Anime => "Anime",
+            Category::People => "People",
+        }
+    }
+
+    /// Its position in Wallhaven's category bit flags.
+    pub const fn index(self) -> usize {
+        self as usize
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|c| c.key().eq_ignore_ascii_case(s))
+    }
+}
+
+impl From<String> for Category {
+    fn from(s: String) -> Self {
+        Self::parse(&s).unwrap_or_default()
+    }
+}
+
+impl From<Category> for &'static str {
+    fn from(c: Category) -> Self {
+        c.key()
+    }
+}
+
+impl std::fmt::Display for Category {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.key())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Sorting {
     Toplist,
@@ -153,7 +272,7 @@ pub struct Tag {
     #[serde(default)]
     pub category: String,
     #[serde(default)]
-    pub purity: String,
+    pub purity: Purity,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -195,8 +314,8 @@ struct SettingsResponse {
 pub struct Wallpaper {
     pub id: String,
     pub url: String,
-    pub purity: String,
-    pub category: String,
+    pub purity: Purity,
+    pub category: Category,
     pub resolution: String,
     pub file_size: u64,
     #[serde(default)]
@@ -692,5 +811,21 @@ mod tests {
             assert_eq!(image::image_dimensions(path).unwrap(), (2560, 1440));
         }
         std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+#[cfg(test)]
+mod purity_tests {
+    use super::{Category, Purity, Tag};
+
+    #[test]
+    fn purities_keep_wallhavens_words_and_fail_safe() {
+        let t: Tag = serde_json::from_str(r#"{"id":1,"name":"x","purity":"sketchy"}"#).unwrap();
+        assert_eq!(t.purity, Purity::Sketchy);
+        assert!(serde_json::to_string(&t).unwrap().contains(r#""purity":"sketchy""#));
+        // Something Wallhaven never said is kept out of sight, not shown.
+        let odd: Tag = serde_json::from_str(r#"{"id":1,"name":"x","purity":"spicy"}"#).unwrap();
+        assert_eq!(odd.purity, Purity::Nsfw);
+        assert_eq!(Category::from("anime".to_owned()), Category::Anime);
     }
 }

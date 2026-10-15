@@ -208,7 +208,7 @@ impl Muralist {
             Some(Item::Remote(w)) => {
                 let thumb = self.remote_thumb(&w, false);
                 let line = format!("{}  ·  {}", w.resolution, w.category);
-                (Some(format!("wallhaven-{}", w.id)), thumb, line, Some(w.purity.clone()))
+                (Some(format!("wallhaven-{}", w.id)), thumb, line, Some(w.purity))
             }
             Some(Item::Local(path)) => {
                 let thumb = self.local_thumb(&path);
@@ -272,7 +272,7 @@ impl Muralist {
                                     .min_w_0()
                                     .gap_1p5()
                                     .children(purity.map(|purity| {
-                                        div().flex_none().size(px(6.)).rounded_full().bg(purity_color(&purity))
+                                        div().flex_none().size(px(6.)).rounded_full().bg(purity_color(purity))
                                     }))
                                     .child(
                                         div()

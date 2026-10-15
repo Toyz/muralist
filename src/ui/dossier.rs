@@ -109,7 +109,7 @@ impl Muralist {
                     .enumerate()
                     .map(|(ix, t)| {
                         let h = bar_h(&t.name);
-                        let col = purity_color(&t.purity);
+                        let col = purity_color(t.purity);
                         div()
                             .w(px(3.))
                             .rounded_sm()

@@ -211,7 +211,7 @@ impl Muralist {
                 .into_iter()
                 .map(|tag| {
                     ix += 1;
-                    let tint = (tag.purity != "sfw" && !tag.purity.is_empty()).then(|| purity_color(&tag.purity));
+                    let tint = (tag.purity != crate::wallhaven::Purity::Sfw).then(|| purity_color(tag.purity));
                     let picked = (*tag).clone();
                     h_flex()
                         .id(("tag", ix))
@@ -345,11 +345,7 @@ impl Muralist {
                             this.similar_query.insert(id.clone(), q);
                         }
                         // And checked here too, whatever the search let through.
-                        let allowed = |w: &Wallpaper| {
-                            let pi = ["sfw", "sketchy", "nsfw"].iter().position(|k| *k == w.purity);
-                            let ci = ["general", "anime", "people"].iter().position(|k| *k == w.category);
-                            pi.is_some_and(|i| purity[i]) && ci.is_none_or(|i| categories[i])
-                        };
+                        let allowed = |w: &Wallpaper| purity[w.purity.index()] && categories[w.category.index()];
                         Similar::Ready(
                             list.into_iter()
                                 .filter(|w| w.id != id && allowed(w))

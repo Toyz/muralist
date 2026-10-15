@@ -17,11 +17,12 @@ pub enum Spoiler {
 }
 
 impl Spoiler {
-    pub fn hides(self, purity: &str) -> bool {
+    pub fn hides(self, purity: crate::wallhaven::Purity) -> bool {
+        use crate::wallhaven::Purity;
         match self {
             Spoiler::Off => false,
-            Spoiler::Nsfw => purity == "nsfw",
-            Spoiler::Sketchy => purity == "nsfw" || purity == "sketchy",
+            Spoiler::Nsfw => purity == Purity::Nsfw,
+            Spoiler::Sketchy => purity != Purity::Sfw,
         }
     }
 }
@@ -80,9 +81,18 @@ pub enum LockMode {
     Single,
 }
 
+/// The config format this build writes. History: 0, unversioned (an old
+/// `min_resolution` key may linger); 1, versioned, `min_resolution` folded
+/// into the search filters.
+pub const CONFIG_VERSION: u32 = 1;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
+    /// The config's format version. Its own default (0, not the struct's)
+    /// so a file written before versioning reads as version 0.
+    #[serde(default)]
+    pub version: u32,
     /// Wallhaven API key. `WALLHAVEN_API_KEY` in the environment wins over this.
     pub api_key: String,
     /// Where full-size wallpapers are saved.
@@ -172,6 +182,7 @@ impl FilterOverrides {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            version: CONFIG_VERSION,
             api_key: String::new(),
             download_dir: dirs::picture_dir()
                 .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join("Pictures"))
@@ -229,15 +240,34 @@ impl Config {
             cfg.save()?;
             cfg
         };
-        if !cfg.min_resolution.is_empty() {
-            if cfg.filters.atleast.is_none() {
-                cfg.filters.atleast = Some(std::mem::take(&mut cfg.min_resolution));
-            }
-            cfg.min_resolution.clear();
+        if cfg.version > CONFIG_VERSION {
+            eprintln!(
+                "muralist: {} was written by a newer muralist (format {}, this one knows {CONFIG_VERSION}); kept a copy",
+                path.display(),
+                cfg.version
+            );
+            crate::store::keep_copy(&path, cfg.version);
+        } else if cfg.version < CONFIG_VERSION {
+            crate::store::keep_copy(&path, cfg.version);
+            cfg.upgrade();
             cfg.save()?;
         }
         cfg.env_api_key = std::env::var("WALLHAVEN_API_KEY").ok().filter(|k| !k.trim().is_empty());
         Ok(cfg)
+    }
+
+    /// Brings a config read from an older format up to this one, a version
+    /// at a time.
+    fn upgrade(&mut self) {
+        for from in self.version..CONFIG_VERSION {
+            if from == 0 && !self.min_resolution.is_empty() {
+                if self.filters.atleast.is_none() {
+                    self.filters.atleast = Some(std::mem::take(&mut self.min_resolution));
+                }
+                self.min_resolution.clear();
+            }
+        }
+        self.version = CONFIG_VERSION;
     }
 
     pub fn effective_api_key(&self) -> &str {
@@ -259,12 +289,19 @@ pub struct State {
     pub history: Vec<HistoryEntry>,
 }
 
+/// Which wallpaper a history entry set. Stored as "desktop" or "lock".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Surface {
+    Desktop,
+    Lock,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HistoryEntry {
     /// Unix seconds.
     pub at: i64,
-    /// "desktop" or "lock".
-    pub target: String,
+    pub target: Surface,
     pub images: BTreeMap<String, PathBuf>,
 }
 
@@ -272,21 +309,23 @@ pub struct HistoryEntry {
 const HISTORY_LIMIT: usize = 400;
 
 impl State {
-    pub fn record(&mut self, target: &str, images: &BTreeMap<String, PathBuf>) {
+    pub fn record(&mut self, target: Surface, images: &BTreeMap<String, PathBuf>) {
         let same_as_last = self.history.iter().rev().find(|e| e.target == target).is_some_and(|e| &e.images == images);
         if same_as_last || images.is_empty() {
             return;
         }
-        self.history.push(HistoryEntry {
-            at: chrono::Utc::now().timestamp(),
-            target: target.to_owned(),
-            images: images.clone(),
-        });
+        self.history.push(HistoryEntry { at: chrono::Utc::now().timestamp(), target, images: images.clone() });
         if self.history.len() > HISTORY_LIMIT {
             let excess = self.history.len() - HISTORY_LIMIT;
             self.history.drain(..excess);
         }
     }
+}
+
+/// Format history: 0, unversioned; 1, versioned, history targets typed
+/// (same words on disk).
+impl crate::store::Versioned for State {
+    const VERSION: u32 = 1;
 }
 
 impl State {
@@ -295,11 +334,11 @@ impl State {
     }
 
     pub fn load() -> Self {
-        crate::store::load_json(&Self::path())
+        crate::store::load_versioned(&Self::path())
     }
 
     pub fn save(&self) -> Result<()> {
-        crate::store::save_json(&Self::path(), self)
+        crate::store::save_versioned(&Self::path(), self)
     }
 }
 
@@ -325,4 +364,63 @@ pub fn config_dir() -> PathBuf {
 
 pub fn cache_dir() -> PathBuf {
     dirs::cache_dir().unwrap_or_default().join("muralist")
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::{CONFIG_VERSION, Config, HistoryEntry, Surface};
+
+    #[test]
+    fn an_unversioned_config_reads_as_version_zero_and_upgrades() {
+        let mut cfg: Config = toml::from_str("min_resolution = \"1920x1080\"\n").unwrap();
+        assert_eq!(cfg.version, 0);
+        cfg.upgrade();
+        assert_eq!(cfg.version, CONFIG_VERSION);
+        assert_eq!(cfg.filters.atleast.as_deref(), Some("1920x1080"));
+        assert!(cfg.min_resolution.is_empty());
+        assert_eq!(Config::default().version, CONFIG_VERSION);
+    }
+
+    #[test]
+    fn history_targets_keep_their_words_on_disk() {
+        let e: HistoryEntry = serde_json::from_str(r#"{"at":1,"target":"lock","images":{}}"#).unwrap();
+        assert_eq!(e.target, Surface::Lock);
+        assert!(serde_json::to_string(&e).unwrap().contains(r#""target":"lock""#));
+    }
+}
+
+/// Loads each real store under `$XDG_CONFIG_HOME/muralist`, saves it back
+/// through the typed structs, and checks nothing but the version stamp
+/// changed. Point it at a copy: `XDG_CONFIG_HOME=/tmp/copy cargo test
+/// stores_round_trip -- --ignored`.
+#[cfg(test)]
+mod round_trip {
+    use std::path::Path;
+
+    fn raw(path: &Path) -> serde_json::Value {
+        let mut v: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        v.as_object_mut().unwrap().remove("version");
+        v
+    }
+
+    #[test]
+    #[ignore = "reads and rewrites the stores under XDG_CONFIG_HOME; point it at a copy"]
+    fn stores_round_trip() {
+        let dir = super::config_dir();
+        let galleries = dir.join("galleries.json");
+        let before = raw(&galleries);
+        crate::gallery::Galleries::load().save().unwrap();
+        assert_eq!(raw(&galleries), before, "galleries changed");
+
+        let state = dir.join("state.json");
+        let before = raw(&state);
+        super::State::load().save().unwrap();
+        assert_eq!(raw(&state), before, "state changed");
+
+        let provenance = dir.join("provenance.json");
+        let before = raw(&provenance);
+        let p = crate::provenance::Provenance::load();
+        crate::store::save_versioned(&provenance, &p).unwrap();
+        assert_eq!(raw(&provenance), before, "provenance changed");
+    }
 }
