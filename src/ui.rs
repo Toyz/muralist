@@ -7,6 +7,7 @@ mod gallery_edit;
 mod gallery_pop;
 mod glass;
 mod gridmodes;
+mod headers;
 mod history;
 mod kit;
 mod library;
@@ -526,38 +527,6 @@ fn no_drag<E: InteractiveElement>(e: E) -> E {
 /// macOS draws its own window buttons at the top left.
 const NATIVE_WINDOW_BUTTONS: bool = cfg!(target_os = "macos");
 
-fn window_controls(window: &Window, p: Pal) -> impl IntoElement {
-    let ctrl = |id: &'static str, name: &str, danger: bool, area: WindowControlArea| {
-        no_drag(
-            div()
-                .id(id)
-                .window_control_area(area)
-                .size(px(28.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded_md()
-                .text_color(p.muted)
-                .cursor_pointer()
-                .hover(
-                    move |s| {
-                        if danger { s.bg(p.error).text_color(white()) } else { s.bg(p.elevated).text_color(p.fg) }
-                    },
-                )
-                .child(icon(name).size_3p5()),
-        )
-    };
-    let max_icon = if window.is_maximized() { "window-restore" } else { "window-maximize" };
-    h_flex()
-        .gap_1()
-        .child(
-            ctrl("win-min", "window-minimize", false, WindowControlArea::Min)
-                .on_click(|_, window, _| window.minimize_window()),
-        )
-        .child(ctrl("win-max", max_icon, false, WindowControlArea::Max).on_click(|_, window, _| window.zoom_window()))
-        .child(ctrl("win-close", "window-close", true, WindowControlArea::Close).on_click(|_, _, cx| cx.quit()))
-}
-
 // ---- loading treatment --------------------------------------------------------
 
 /// Where the selected original is in its download.
@@ -1028,6 +997,8 @@ pub struct Muralist {
     span_edit: Option<span_editor::SpanEdit>,
     rotating: bool,
     last_rotation: Instant,
+    /// The pointer is over the settings gear, which spins up.
+    gear_hover: bool,
     history_hover: Option<usize>,
     /// The day the History timeline is narrowed to, if any.
     history_day: Option<chrono::NaiveDate>,
@@ -1281,6 +1252,7 @@ impl Muralist {
             span_edit: None,
             rotating: false,
             last_rotation: Instant::now(),
+            gear_hover: false,
             history_hover: None,
             history_day: None,
             history_month: None,
@@ -2677,6 +2649,7 @@ impl Muralist {
         let saved = self.cfg.filters.count();
         let defaults_name = if self.account.is_some() { "account defaults" } else { "defaults" };
 
+        let side_head = self.render_side_head(cx);
         let backdrop = self.backdrop();
         v_flex()
             .relative()
@@ -2690,30 +2663,10 @@ impl Muralist {
             .children(glass::glass_layers(backdrop, "side", p))
             .child(
                 title_region(h_flex(), p)
-                    .gap_2p5()
-                    .px_5()
+                    .px_3()
                     // Room for the system window buttons.
                     .when(NATIVE_WINDOW_BUTTONS, |d| d.pl(px(84.)))
-                    .child(
-                        // The logo's gradient slowly turns, in the live palette.
-                        div().size(px(26.)).rounded_lg().with_animation(
-                            "logo-spin",
-                            Animation::new(std::time::Duration::from_secs(8)).repeat(),
-                            move |d, t| {
-                                d.bg(linear_gradient(
-                                    135. + t * 360.,
-                                    linear_color_stop(p.accent, 0.),
-                                    linear_color_stop(hex(0x22d3ee), 1.),
-                                ))
-                            },
-                        ),
-                    )
-                    .child(div().text_base().font_weight(FontWeight::BOLD).child("muralist"))
-                    .child(div().flex_1())
-                    .child(
-                        no_drag(icon_button("open-settings", "settings", p))
-                            .on_click(cx.listener(|this, _, window, cx| this.open_settings(window, cx))),
-                    ),
+                    .child(side_head),
             )
             .child(div().px_3().pt_3().child(nav))
             .child(div().id("filters").flex_1().min_h_0().overflow_y_scroll().child(cards))
@@ -4192,11 +4145,6 @@ impl Muralist {
     fn render_inspector(&mut self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let p = pal();
         let details = self.render_details(cx);
-        let title = match &self.selected {
-            Some(Item::Remote(w)) => format!("wallhaven-{}", w.id),
-            Some(Item::Local(path)) => file_name(path),
-            None => "Details".into(),
-        };
         let enter_key = match &self.selected {
             Some(Item::Remote(w)) => w.id.clone(),
             Some(Item::Local(path)) => local_key(path),
@@ -4217,14 +4165,9 @@ impl Muralist {
             .border_l_1()
             .border_color(p.border)
             .children(glass::glass_layers(backdrop, "inspector", p))
-            .child(
-                title_region(h_flex(), p)
-                    .pl(px(INSPECTOR_PAD))
-                    .pr_3()
-                    .gap_2()
-                    .child(div().flex_1().min_w_0().truncate().text_xs().text_color(p.dim).child(title))
-                    .when(!NATIVE_WINDOW_BUTTONS, |d| d.child(window_controls(window, p))),
-            )
+            .child(title_region(h_flex(), p).px_3().child(
+                self.render_inspector_head((!NATIVE_WINDOW_BUTTONS).then(|| headers::window_controls(window, p))),
+            ))
             .child(
                 div()
                     .id("inspector")
