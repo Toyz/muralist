@@ -424,6 +424,27 @@ fn keycap(label: &'static str, p: Pal) -> Div {
     div().px_1().rounded_sm().border_1().border_color(p.border_strong).text_xs().text_color(p.dim).child(label)
 }
 
+/// How long the active nav tile holds each image before dissolving.
+const NAV_HOLD_SECS: f32 = 3.5;
+
+/// Weight of one image in a looping dissolve, where `phase` counts images
+/// from this one (0 = its turn starting) and `n` is how many there are. Each
+/// fades in over the first part of its turn and hands over to the next as
+/// that one fades in, so neighboring weights always sum to one.
+fn dissolve_weight(phase: f32, n: f32) -> f32 {
+    const FADE: f32 = 0.3;
+    let ph = phase.rem_euclid(n);
+    if ph < FADE {
+        ph / FADE
+    } else if ph < 1. {
+        1.
+    } else if ph < 1. + FADE {
+        1. - (ph - 1.) / FADE
+    } else {
+        0.
+    }
+}
+
 /// A small label over a group inside a card.
 fn sub_label(title: &str, p: Pal) -> Div {
     v_flex().gap_1p5().child(div().text_xs().text_color(p.dim).child(title.to_owned()))
@@ -2136,13 +2157,29 @@ impl Muralist {
             // Readable on the dark wash at the tile's foot.
             let label_c = adaptive::readable(Hsla { l: c.l.max(0.62), ..c }, hsla(0., 0., 0.06, 1.), 4.5);
             let group = SharedString::from(format!("{id}-g"));
-            let strip = |gray: bool| {
-                h_flex().absolute().inset_0().gap(px(1.)).children(thumbs.iter().map(|t| {
-                    div()
-                        .flex_1()
-                        .h_full()
-                        .child(img(t.clone()).size_full().object_fit(ObjectFit::Cover).grayscale(gray))
-                }))
+            let n = thumbs.len();
+            let layer = |path: PathBuf, gray: bool| {
+                div().absolute().inset_0().child(img(path).size_full().object_fit(ObjectFit::Cover).grayscale(gray))
+            };
+            // The active tile dissolves from one image to the next, so they
+            // blend over time instead of sitting side by side.
+            let montage = |gray: bool| -> Vec<AnyElement> {
+                if n <= 1 || !on {
+                    return thumbs.first().map(|t| layer(t.clone(), gray).into_any_element()).into_iter().collect();
+                }
+                thumbs
+                    .iter()
+                    .enumerate()
+                    .map(|(k, path)| {
+                        layer(path.clone(), gray)
+                            .with_animation(
+                                SharedString::from(format!("{id}-dissolve-{k}-{n}")),
+                                Animation::new(std::time::Duration::from_secs_f32(n as f32 * NAV_HOLD_SECS)).repeat(),
+                                move |d, t| d.opacity(dissolve_weight(t * n as f32 - k as f32, n as f32)),
+                            )
+                            .into_any_element()
+                    })
+                    .collect()
             };
             let empty = thumbs.is_empty();
             div()
@@ -2159,59 +2196,66 @@ impl Muralist {
                     linear_color_stop(p.surface2, 1.),
                 ))
                 .border_1()
-                .border_color(if on { c } else { p.border })
-                .when(!on, |d| d.hover(move |s| s.border_color(with_alpha(c, 0.6))))
+                .border_color(if on { with_alpha(c, 0.75) } else { with_alpha(p.border, 0.) })
+                .when(!on, |d| d.hover(move |s| s.border_color(with_alpha(c, 0.45))))
                 .when(empty, |d| {
                     d.child(
                         div()
                             .absolute()
                             .right(px(-6.))
                             .top(px(-6.))
-                            .child(icon(icon_name).size(px(44.)).text_color(with_alpha(p.fg, 0.06))),
+                            .child(icon(icon_name).size(px(44.)).text_color(with_alpha(c, 0.18))),
                     )
                 })
-                // Resting: grayscale under a dark wash. Hover or active: color.
+                // Resting: grayscale. Hover or active: color.
                 .when(!empty, |d| {
                     if on {
-                        d.child(strip(false))
+                        d.children(montage(false))
                     } else {
-                        d.child(strip(true)).child(strip(false).invisible().group_hover(group.clone(), |s| s.visible()))
+                        d.children(montage(true)).child(
+                            div()
+                                .absolute()
+                                .inset_0()
+                                .invisible()
+                                .group_hover(group.clone(), |s| s.visible())
+                                .children(montage(false)),
+                        )
                     }
                 })
                 .child(div().absolute().inset_0().bg(linear_gradient(
                     0.,
-                    linear_color_stop(hsla(0., 0., 0., if on { 0.72 } else { 0.82 }), 0.),
-                    linear_color_stop(hsla(0., 0., 0., if on { 0.05 } else { 0.4 }), 1.),
+                    linear_color_stop(hsla(0., 0., 0., if on { 0.7 } else { 0.72 }), 0.),
+                    linear_color_stop(hsla(0., 0., 0., if on { 0.0 } else { 0.18 }), 1.),
                 )))
                 .when(on, |d| {
                     // One pass of light across the chosen tile.
-                    d.child(
-                        div()
-                            .absolute()
-                            .top_0()
-                            .bottom_0()
-                            .w(px(40.))
-                            .bg(linear_gradient(
+                    d.child(div().absolute().top_0().bottom_0().w(px(40.)).with_animation(
+                        SharedString::from(format!("sweep-{id}")),
+                        Animation::new(std::time::Duration::from_millis(700)).with_easing(ease_in_out),
+                        move |d, t| {
+                            // The sweep is the tile's own color, lifted.
+                            let a = (1. - (2. * t - 1.).abs()) * 0.3;
+                            let light = Hsla { l: 0.8, a, ..c };
+                            d.left(px(-40. + 200. * t)).bg(linear_gradient(
                                 90.,
-                                linear_color_stop(hsla(0., 0., 1., 0.), 0.),
-                                linear_color_stop(hsla(0., 0., 1., 0.0), 1.),
+                                linear_color_stop(with_alpha(light, 0.), 0.),
+                                linear_color_stop(light, 0.5),
                             ))
-                            .with_animation(
-                                SharedString::from(format!("sweep-{id}")),
-                                Animation::new(std::time::Duration::from_millis(700)).with_easing(ease_in_out),
-                                move |d, t| {
-                                    // The sweep is the tile's own color, lifted.
-                                    let a = (1. - (2. * t - 1.).abs()) * 0.3;
-                                    let light = Hsla { l: 0.8, a, ..c };
-                                    d.left(px(-40. + 200. * t)).bg(linear_gradient(
-                                        90.,
-                                        linear_color_stop(with_alpha(light, 0.), 0.),
-                                        linear_color_stop(light, 0.5),
-                                    ))
-                                },
-                            ),
-                    )
+                        },
+                    ))
                 })
+                .children(counts[ix].clone().map(|count| {
+                    div()
+                        .absolute()
+                        .top(px(5.))
+                        .right(px(5.))
+                        .px_1p5()
+                        .rounded_full()
+                        .bg(hsla(0., 0., 0., 0.5))
+                        .text_xs()
+                        .text_color(hsla(0., 0., 1., if on { 0.9 } else { 0.65 }))
+                        .child(count)
+                }))
                 .child(
                     h_flex()
                         .absolute()
@@ -2219,18 +2263,20 @@ impl Muralist {
                         .right(px(9.))
                         .bottom(px(6.))
                         .gap_1p5()
-                        .child(icon(icon_name).size_3p5().text_color(if on { label_c } else { hsla(0., 0., 1., 0.7) }))
+                        .child(icon(icon_name).size_3p5().flex_none().text_color(if on {
+                            label_c
+                        } else {
+                            hsla(0., 0., 1., 0.7)
+                        }))
                         .child(
                             div()
-                                .flex_1()
+                                .min_w_0()
+                                .truncate()
                                 .text_sm()
                                 .font_weight(if on { FontWeight::SEMIBOLD } else { FontWeight::MEDIUM })
-                                .text_color(if on { white() } else { hsla(0., 0., 1., 0.78) })
+                                .text_color(if on { white() } else { hsla(0., 0., 1., 0.8) })
                                 .child(label),
-                        )
-                        .children(counts[ix].clone().map(|c| {
-                            div().text_xs().text_color(hsla(0., 0., 1., if on { 0.75 } else { 0.5 })).child(c)
-                        })),
+                        ),
                 )
                 .on_click(cx.listener(move |this, _, _, cx| {
                     match t {
@@ -3960,7 +4006,18 @@ impl Render for Muralist {
 
 #[cfg(test)]
 mod tests {
-    use super::thousands;
+    use super::{dissolve_weight, thousands};
+
+    #[test]
+    fn dissolve_weights_always_sum_to_one() {
+        for n in [2usize, 3, 4] {
+            for step in 0..400 {
+                let c = step as f32 / 400. * n as f32;
+                let total: f32 = (0..n).map(|k| dissolve_weight(c - k as f32, n as f32)).sum();
+                assert!((total - 1.).abs() < 1e-4, "n={n} c={c} total={total}");
+            }
+        }
+    }
 
     #[test]
     fn thousands_groups_digits() {
