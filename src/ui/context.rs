@@ -374,54 +374,45 @@ impl Muralist {
                 .collect();
             let desk_h = (max_y - min_y) as f32 * scale + 9.;
             v_flex()
-                .gap_1p5()
+                .items_center()
                 .p_2()
                 .rounded_lg()
                 .bg(hsla(0., 0., 0., 0.5))
                 .border_1()
                 .border_color(hsla(0., 0., 1., 0.12))
                 .child(
-                    h_flex()
-                        .gap_2()
-                        .items_end()
-                        .child(
-                            div()
-                                .relative()
-                                .flex_none()
-                                .w(px((max_x - min_x) as f32 * scale))
-                                .h(px(desk_h))
-                                .children(screens),
-                        )
-                        .child(
-                            div()
-                                .id("ctx-all")
-                                .mb(px(9.))
-                                .px_2p5()
-                                .h(px(26.))
-                                .flex()
-                                .items_center()
-                                .rounded_md()
-                                .border_1()
-                                .border_color(if all_hover { c } else { hsla(0., 0., 1., 0.4) })
-                                .bg(if all_hover { with_alpha(c, 0.35) } else { hsla(0., 0., 0., 0.3) })
-                                .text_xs()
-                                .text_color(white())
-                                .cursor_pointer()
-                                .child("All")
-                                .on_hover(cx.listener(move |this, over: &bool, _, cx| {
-                                    let next = if *over { Some(ALL) } else { this.context_hover.filter(|h| *h != ALL) };
-                                    if this.context_hover != next {
-                                        this.context_hover = next;
-                                        cx.notify();
-                                    }
-                                }))
-                                .on_click(
-                                    cx.listener(|this, _, window, cx| this.run_context(Action::SetAll, window, cx)),
-                                ),
-                        ),
+                    div().relative().flex_none().w(px((max_x - min_x) as f32 * scale)).h(px(desk_h)).children(screens),
+                )
+                // The desk they all stand on is the All button.
+                .child(
+                    div()
+                        .id("ctx-all")
+                        .w(px((max_x - min_x) as f32 * scale))
+                        .h(px(20.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(if all_hover { c } else { hsla(0., 0., 1., 0.25) })
+                        .bg(if all_hover { with_alpha(c, 0.4) } else { hsla(0., 0., 1., 0.08) })
+                        .text_size(px(10.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(if all_hover { white() } else { hsla(0., 0., 1., 0.7) })
+                        .cursor_pointer()
+                        .child("ALL SCREENS")
+                        .on_hover(cx.listener(move |this, over: &bool, _, cx| {
+                            let next = if *over { Some(ALL) } else { this.context_hover.filter(|h| *h != ALL) };
+                            if this.context_hover != next {
+                                this.context_hover = next;
+                                cx.notify();
+                            }
+                        }))
+                        .on_click(cx.listener(|this, _, window, cx| this.run_context(Action::SetAll, window, cx))),
                 )
                 .child(
                     div()
+                        .mt_1p5()
                         .text_size(px(10.))
                         .text_color(if hover.is_some() { white() } else { hsla(0., 0., 1., 0.55) })
                         .child(caption),
