@@ -42,6 +42,8 @@ const SIDEBAR_W: f32 = 264.;
 const DETAILS_W: f32 = INSPECTOR_W - INSPECTOR_PAD * 2.;
 const TITLE_H: f32 = 56.;
 const CARD_PAD: f32 = 16.;
+/// Sidebar cards are narrower, so a little tighter.
+const SIDE_CARD_PAD: f32 = 12.;
 const INSPECTOR_W: f32 = 420.;
 const INSPECTOR_PAD: f32 = 20.;
 /// Preview height when nothing (or nothing measurable) is selected.
@@ -322,6 +324,54 @@ fn segment(id: impl Into<ElementId>, label: impl Into<SharedString>, on: bool, p
 
 fn segmented_track(p: Pal) -> Div {
     h_flex().p_1().gap_1().rounded_lg().bg(p.bg).border_1().border_color(p.border)
+}
+
+/// A titled card in the sidebar, in the same language as the inspector's
+/// cards. `summary` sits at the right of the header: the card's current value.
+fn side_card(icon_name: &str, title: &str, summary: Option<SharedString>, p: Pal) -> Div {
+    side_card_with(icon_name, title, p, |h| {
+        h.children(summary.map(|s| div().min_w_0().text_xs().text_color(p.dim).truncate().child(s)))
+    })
+}
+
+/// [`side_card`] with a custom right side of the header.
+fn side_card_with(icon_name: &str, title: &str, p: Pal, right: impl FnOnce(Div) -> Div) -> Div {
+    let head = h_flex()
+        .gap_2()
+        .child(icon(icon_name).size_4().flex_none().text_color(p.accent))
+        .child(div().flex_none().text_sm().font_weight(FontWeight::SEMIBOLD).child(title.to_owned()))
+        .child(div().flex_1());
+    v_flex()
+        .gap_3()
+        .p(px(SIDE_CARD_PAD))
+        .rounded_xl()
+        .bg(with_alpha(p.surface2, 0.82))
+        .border_1()
+        .border_color(p.border)
+        .child(right(head).min_w_0().gap_2())
+}
+
+/// A small label over a group inside a card.
+fn sub_label(title: &str, p: Pal) -> Div {
+    v_flex().gap_1p5().child(div().text_xs().text_color(p.dim).child(title.to_owned()))
+}
+
+/// A full-width switch row inside a card.
+fn toggle_line(id: &'static str, label: &str, on: bool, p: Pal) -> Stateful<Div> {
+    h_flex()
+        .id(id)
+        .justify_between()
+        .gap_2()
+        .mx(px(-6.))
+        .px(px(6.))
+        .h(px(32.))
+        .rounded_md()
+        .cursor_pointer()
+        .text_xs()
+        .text_color(p.muted)
+        .hover(move |s| s.bg(with_alpha(p.elevated, 0.7)).text_color(p.fg))
+        .child(label.to_owned())
+        .child(switch(on, p))
 }
 
 fn section(title: &str, p: Pal) -> Div {
@@ -906,15 +956,15 @@ impl Muralist {
         });
 
         let mut applied = State::load();
-        if let Some(Ok(current)) = backend.desktop().and_then(|w| w.current(&monitors)) {
-            if !current.is_empty() {
-                applied.desktop = current;
-            }
+        if let Some(Ok(current)) = backend.desktop().and_then(|w| w.current(&monitors))
+            && !current.is_empty()
+        {
+            applied.desktop = current;
         }
-        if let Some(Ok(current)) = backend.lock().and_then(|w| w.current(&monitors)) {
-            if !current.is_empty() {
-                applied.lock = current;
-            }
+        if let Some(Ok(current)) = backend.lock().and_then(|w| w.current(&monitors))
+            && !current.is_empty()
+        {
+            applied.lock = current;
         }
 
         let query = cx.new(|cx| InputState::new(window, cx).placeholder("Search tags, @username, id:123, like:abc123"));
@@ -1928,59 +1978,55 @@ impl Muralist {
         let tab = self.tab;
         let has_key = self.client.has_key();
 
-        let nav = |id: &'static str, icon_name: &str, label: &str, count: Option<usize>, active: bool| {
-            h_flex()
-                .id(id)
-                .relative()
-                .gap_2p5()
-                .h(px(36.))
-                .px_3()
-                .rounded_lg()
-                .cursor_pointer()
-                .map(|d| {
-                    if active {
-                        d.bg(with_alpha(p.elevated, 0.85)).text_color(p.fg).font_weight(FontWeight::MEDIUM).child(
-                            // Lit edge marker.
-                            div()
-                                .absolute()
-                                .left(px(-12.))
-                                .top(px(9.))
-                                .w(px(3.))
-                                .h(px(18.))
-                                .rounded_full()
-                                .bg(p.accent),
-                        )
-                    } else {
-                        d.text_color(p.muted).hover(move |s| s.bg(p.surface2).text_color(p.fg))
-                    }
-                })
-                .child(icon(icon_name).size_4().text_color(if active { p.accent } else { p.muted }))
-                .child(div().flex_1().child(label.to_string()))
-                .children(count.map(|c| {
-                    div().px_1p5().rounded_md().bg(p.surface2).text_xs().text_color(p.muted).child(c.to_string())
-                }))
+        let nav = |id: &'static str, label: String, t: Tab| {
+            segment(id, label, tab == t, p).on_click(cx.listener(move |this, _, _, cx| {
+                if t == Tab::Library {
+                    this.refresh_library();
+                }
+                this.tab = t;
+                cx.notify();
+            }))
         };
+        let counted = |label: &str, n: usize| {
+            if n == 0 { label.to_owned() } else { format!("{label}  {}", compact_count(n as u64)) }
+        };
+        let nav = segmented_track(p)
+            .child(nav("nav-discover", "Discover".into(), Tab::Discover))
+            .child(nav("nav-library", counted("Library", self.library.len()), Tab::Library))
+            .child(nav("nav-history", counted("History", self.applied.history.len()), Tab::History));
 
-        let mut filters = v_flex().gap_5().px_5().py_4();
+        let mut cards = v_flex().gap_3().px_3().py_3();
         if tab == Tab::Discover {
+            // Sort.
             let sorts = Sorting::ALL.iter().enumerate().map(|(i, &s)| {
                 opt(("sort", i), s.label(), self.sorting == s, None, p).on_click(cx.listener(move |this, _, _, cx| {
                     this.sorting = s;
                     this.search(true, cx);
                 }))
             });
-            filters = filters.child(section("Sort by", p).child(opt_grid(3).children(sorts)));
-
-            if self.sorting == Sorting::Toplist {
+            let sort_summary = if self.sorting == Sorting::Toplist {
+                format!("Top {}", self.top_range)
+            } else {
+                self.sorting.label().to_owned()
+            };
+            let ranges = (self.sorting == Sorting::Toplist).then(|| {
                 let ranges = TOP_RANGES.iter().enumerate().map(|(i, &r)| {
-                    opt(("range", i), r, self.top_range == r, None, p).on_click(cx.listener(move |this, _, _, cx| {
-                        this.top_range = r.into();
-                        this.search(true, cx);
-                    }))
+                    segment(("range", i), r, self.top_range == r, p).px_0().on_click(cx.listener(
+                        move |this, _, _, cx| {
+                            this.top_range = r.into();
+                            this.search(true, cx);
+                        },
+                    ))
                 });
-                filters = filters.child(section("Top of", p).child(opt_grid(4).children(ranges)));
-            }
+                segmented_track(p).children(ranges)
+            });
+            cards = cards.child(
+                side_card("arrow-down-wide-narrow", "Sort", Some(sort_summary.into()), p)
+                    .child(opt_grid(4).children(sorts))
+                    .children(ranges),
+            );
 
+            // Shape: aspect ratio and minimum resolution.
             let mut ratios: Vec<(String, Option<String>)> =
                 RATIO_PRESETS.iter().map(|(l, v)| (l.to_string(), v.map(str::to_owned))).collect();
             if let Some(acc) = self.account.as_ref().and_then(|a| a.ratios()) {
@@ -1988,6 +2034,7 @@ impl Muralist {
                     ratios.push(("Account".into(), Some(acc)));
                 }
             }
+            let ratio_label = ratios.iter().find(|(_, v)| *v == self.ratios).map(|(l, _)| l.clone());
             let ratio_cols = ratios.len() as u16;
             let ratio_opts = ratios.into_iter().enumerate().map(|(i, (label, value))| {
                 let on = self.ratios == value;
@@ -1996,8 +2043,11 @@ impl Muralist {
                     this.search(true, cx);
                 }))
             });
-            filters = filters.child(section("Aspect ratio", p).child(opt_grid(ratio_cols).children(ratio_opts)));
-
+            let res_label = if self.resolutions.is_some() {
+                Some("Account".to_owned())
+            } else {
+                RES_PRESETS.iter().find(|(_, v)| *v == self.atleast.as_deref()).map(|(l, _)| l.to_string())
+            };
             let res_opts = RES_PRESETS.iter().enumerate().map(|(i, &(label, value))| {
                 let on = self.resolutions.is_none() && self.atleast.as_deref() == value;
                 opt(("res", i), label, on, None, p)
@@ -2011,9 +2061,19 @@ impl Muralist {
                     this.search(true, cx);
                 }))
             });
-            filters = filters
-                .child(section("Minimum resolution", p).child(opt_grid(4).children(res_opts)).children(res_account));
+            let shape_summary = match (ratio_label.as_deref(), res_label.as_deref()) {
+                (Some("Any") | None, Some("Any") | None) => "Any".to_owned(),
+                (Some("Any") | None, Some(r)) => format!("{r}+"),
+                (Some(a), Some("Any") | None) => a.to_owned(),
+                (Some(a), Some(r)) => format!("{a}, {r}+"),
+            };
+            cards = cards.child(
+                side_card("proportions", "Shape", Some(shape_summary.into()), p)
+                    .child(sub_label("Aspect ratio", p).child(opt_grid(ratio_cols).children(ratio_opts)))
+                    .child(sub_label("At least", p).child(opt_grid(4).children(res_opts)).children(res_account)),
+            );
 
+            // Content: categories and purity.
             let cats = CATEGORIES.iter().enumerate().map(|(i, &label)| {
                 opt(("cat", i), label, self.categories[i], None, p).on_click(cx.listener(move |this, _, _, cx| {
                     this.categories[i] = !this.categories[i];
@@ -2023,8 +2083,6 @@ impl Muralist {
                     this.search(true, cx);
                 }))
             });
-            filters = filters.child(section("Categories", p).child(opt_grid(3).children(cats)));
-
             // NSFW needs an API key, so it isn't offered without one.
             let purities: Vec<_> = PURITIES
                 .iter()
@@ -2043,8 +2101,26 @@ impl Muralist {
                 })
                 .collect();
             let purity_cols = purities.len() as u16;
-            filters = filters.child(section("Purity", p).child(opt_grid(purity_cols).children(purities)));
+            // The header shows which purities are on, as their colored dots.
+            let purity_dots = h_flex().gap_1().children(
+                PURITIES
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| self.purity[*i])
+                    .map(|(_, &label)| div().size(px(7.)).rounded_full().bg(purity_color(label))),
+            );
+            let on_cats: Vec<&str> =
+                CATEGORIES.iter().enumerate().filter(|(i, _)| self.categories[*i]).map(|(_, &c)| c).collect();
+            let cat_summary = if on_cats.len() == CATEGORIES.len() { "All".to_owned() } else { on_cats.join(", ") };
+            cards = cards.child(
+                side_card_with("layers", "Content", p, |h| {
+                    h.child(div().text_xs().text_color(p.dim).truncate().child(cat_summary)).child(purity_dots)
+                })
+                .child(opt_grid(3).children(cats))
+                .child(opt_grid(purity_cols).children(purities)),
+            );
 
+            // Color.
             let current_color = self.color.clone();
             let any_swatch = div()
                 .id("color-any")
@@ -2053,10 +2129,11 @@ impl Muralist {
                 .flex()
                 .items_center()
                 .justify_center()
-                .bg(p.surface2)
+                .bg(p.bg)
                 .border_1()
                 .border_color(if current_color.is_none() { p.fg } else { p.border })
                 .cursor_pointer()
+                .hover(move |s| s.border_color(p.border_strong))
                 .child(icon("ban").size_3().text_color(p.muted))
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.color = None;
@@ -2078,63 +2155,55 @@ impl Muralist {
                         this.search(true, cx);
                     }))
             });
-            filters = filters.child(
-                section("Color", p).child(div().grid().grid_cols(10).gap_1().child(any_swatch).children(swatches)),
+            let color_head = current_color.as_deref().and_then(|c| u32::from_str_radix(c, 16).ok());
+            cards = cards.child(
+                side_card_with("palette", "Color", p, |h| match color_head {
+                    Some(c) => h.child(
+                        div().w(px(18.)).h(px(10.)).rounded_sm().bg(hex(c)).border_1().border_color(p.border_strong),
+                    ),
+                    None => h.child(div().text_xs().text_color(p.dim).child("Any")),
+                })
+                .child(div().grid().grid_cols(8).gap_1().child(any_swatch).children(swatches)),
             );
 
+            // Visibility.
             let hide_ai = self.hide_ai_art;
             let spoilers_on = self.cfg.spoiler != crate::config::Spoiler::Off;
-            filters = filters.child(
-                section("Other", p)
-                    .gap_1p5()
-                    .child(
-                        h_flex()
-                            .id("spoiler-toggle")
-                            .justify_between()
-                            .px_3()
-                            .h(px(36.))
-                            .rounded_lg()
-                            .bg(p.surface2)
-                            .cursor_pointer()
-                            .hover(move |s| s.bg(p.elevated))
-                            .child(div().text_xs().child("Hide NSFW until hover"))
-                            .child(switch(spoilers_on, p))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.cfg.spoiler = if spoilers_on {
-                                    crate::config::Spoiler::Off
-                                } else {
-                                    crate::config::Spoiler::Nsfw
-                                };
-                                if let Err(e) = this.cfg.save() {
-                                    eprintln!("saving config: {e:#}");
-                                }
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        h_flex()
-                            .id("ai")
-                            .justify_between()
-                            .px_3()
-                            .h(px(36.))
-                            .rounded_lg()
-                            .bg(p.surface2)
-                            .cursor_pointer()
-                            .hover(move |s| s.bg(p.elevated))
-                            .child(div().text_xs().child("Hide AI art"))
-                            .child(switch(hide_ai, p))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.hide_ai_art = !this.hide_ai_art;
-                                this.search(true, cx);
-                            })),
-                    ),
+            cards = cards.child(
+                side_card("eye", "Visibility", None, p)
+                    .gap_1()
+                    .child(toggle_line("spoiler-toggle", "Hide NSFW until hover", spoilers_on, p).on_click(
+                        cx.listener(move |this, _, _, cx| {
+                            this.cfg.spoiler =
+                                if spoilers_on { crate::config::Spoiler::Off } else { crate::config::Spoiler::Nsfw };
+                            if let Err(e) = this.cfg.save() {
+                                eprintln!("saving config: {e:#}");
+                            }
+                            cx.notify();
+                        }),
+                    ))
+                    .child(toggle_line("ai", "Hide AI art", hide_ai, p).on_click(cx.listener(|this, _, _, cx| {
+                        this.hide_ai_art = !this.hide_ai_art;
+                        this.search(true, cx);
+                    }))),
+            );
+        } else if tab == Tab::Library {
+            cards = cards.child(
+                side_card("folder", "Library", Some(compact_count(self.library.len() as u64).into()), p).child(
+                    div()
+                        .text_xs()
+                        .text_color(p.muted)
+                        .child("Wallpapers you have downloaded or set. Select one to put it on a display."),
+                ),
             );
         } else {
-            filters = filters.child(div().text_xs().text_color(p.dim).child(if tab == Tab::History {
-                "Every set you've applied. Restore or re-apply one, or hover it and hold Space to see it on your desktop."
-            } else {
-                "Wallpapers you have downloaded or set. Select one to put it on a display."
-            }));
+            cards = cards.child(
+                side_card("calendar", "History", Some(compact_count(self.applied.history.len() as u64).into()), p)
+                    .child(div().text_xs().text_color(p.muted).child(
+                        "Every set you've applied. Restore or re-apply one, or hover it and hold Space to see it on \
+                         your desktop.",
+                    )),
+            );
         }
 
         let saved = self.cfg.filters.count();
@@ -2155,6 +2224,8 @@ impl Muralist {
                 title_region(h_flex(), p)
                     .gap_2p5()
                     .px_5()
+                    // Room for the system window buttons.
+                    .when(NATIVE_WINDOW_BUTTONS, |d| d.pl(px(84.)))
                     .child(
                         // The logo's gradient slowly turns, in the live palette.
                         div().size(px(26.)).rounded_lg().with_animation(
@@ -2170,67 +2241,30 @@ impl Muralist {
                         ),
                     )
                     .child(div().text_base().font_weight(FontWeight::BOLD).child("muralist"))
-                    .child(div().px_1p5().rounded_md().bg(p.surface2).text_xs().text_color(p.dim).child("wallhaven"))
                     .child(div().flex_1())
                     .child(
                         no_drag(icon_button("open-settings", "settings", p))
                             .on_click(cx.listener(|this, _, window, cx| this.open_settings(window, cx))),
                     ),
             )
-            .child(
-                v_flex()
-                    .px_3()
-                    .pt_3()
-                    .pb_3()
-                    .gap_0p5()
-                    .border_b_1()
-                    .border_color(p.border)
-                    .child(nav("nav-discover", "globe", "Discover", None, tab == Tab::Discover).on_click(cx.listener(
-                        |this, _, _, cx| {
-                            this.tab = Tab::Discover;
-                            cx.notify();
-                        },
-                    )))
-                    .child(
-                        nav("nav-library", "folder", "Library", Some(self.library.len()), tab == Tab::Library)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.refresh_library();
-                                this.tab = Tab::Library;
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        nav(
-                            "nav-history",
-                            "calendar",
-                            "History",
-                            Some(self.applied.history.len()).filter(|n| *n > 0),
-                            tab == Tab::History,
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.tab = Tab::History;
-                            cx.notify();
-                        })),
-                    ),
-            )
-            .child(div().id("filters").flex_1().min_h_0().overflow_y_scroll().child(filters))
-            .when(!self.client.has_key(), |d| {
+            .child(div().px_3().pt_3().child(nav))
+            .child(div().id("filters").flex_1().min_h_0().overflow_y_scroll().child(cards))
+            .when(!has_key, |d| {
                 d.child(
                     h_flex()
                         .id("add-key")
                         .mx_3()
-                        .mb_2()
-                        .gap_2()
-                        .px_3()
-                        .py_2()
-                        .rounded_lg()
+                        .mb_3()
+                        .gap_2p5()
+                        .p_3()
+                        .rounded_xl()
                         .bg(with_alpha(p.accent, 0.1))
                         .border_1()
                         .border_color(with_alpha(p.accent, 0.35))
                         .text_xs()
                         .cursor_pointer()
                         .hover(move |s| s.bg(with_alpha(p.accent, 0.18)))
-                        .child(icon("settings").size_3p5().text_color(p.accent))
+                        .child(icon("key-round").size_4().text_color(p.accent))
                         .child(
                             v_flex()
                                 .flex_1()
@@ -2258,17 +2292,11 @@ impl Muralist {
                                         )),
                                     )
                                     .child(
-                                        h_flex()
-                                            .id("reset")
-                                            .gap_1p5()
-                                            .px_2()
-                                            .h(px(26.))
-                                            .rounded_md()
-                                            .text_color(p.muted)
-                                            .cursor_pointer()
-                                            .hover(move |s| s.bg(p.surface2).text_color(p.fg))
-                                            .child(icon("rotate-cw").size_3())
-                                            .child("Reset")
+                                        kit::Btn::new("reset")
+                                            .label("Reset")
+                                            .icon("rotate-ccw")
+                                            .ghost()
+                                            .sm()
                                             .on_click(cx.listener(|this, _, _, cx| this.reset_filters(cx))),
                                     )
                             }
