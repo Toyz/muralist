@@ -10,12 +10,12 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::{
-    FullPhase, Item, Muralist, Placement, Tab, develop_bands, fade_in, file_name, glass, icon, kit, local_key, pal,
-    progress_line, purity_color, radius, segment, segmented_track, with_alpha,
+    FullPhase, Item, Muralist, Placement, Tab, boxed, develop, develop_bands, fade_in, file_name, glass, gridmodes,
+    headers, icon, kit, local_key, mib, pal, progress_line, purity_color, radius, segment, segmented_track, with_alpha,
 };
 use crate::span::{self, Framing};
 
-const TOP: f32 = 76.;
+const TOP: f32 = 96.;
 const FILM_H: f32 = 104.;
 const SIDE: f32 = 84.;
 const PANEL_W: f32 = 340.;
@@ -212,6 +212,31 @@ impl Muralist {
             let band_key = format!("lb-{key}");
             let rect = self.lb_rect.clone();
             let loupe = self.render_loupe(dims, full.clone().or(best), x, y, w, h);
+            // While the original downloads, the camera hunts for focus over
+            // it; when it lands, it locks.
+            let hud = bands.map(|b| develop::hud(&band_key, b, &colors, glow_c, h)).unwrap_or_default();
+            if developing {
+                self.lb_develop_watch = Some(key.clone());
+            }
+            let lock = match (&phase, &item) {
+                (FullPhase::Done, Item::Remote(w)) if self.lb_develop_watch.as_deref() == Some(key.as_str()) => {
+                    develop::lock(&band_key, glow_c, format!("LOCKED  {}  ·  {:.1} MB", w.resolution, mib(w.file_size)))
+                }
+                _ => Vec::new(),
+            };
+            // At rest, just the viewfinder's corners around the picture.
+            let viewfinder = (!developing).then(|| {
+                div()
+                    .absolute()
+                    .left(px(x - 10.))
+                    .top(px(y - 10.))
+                    .w(px(w + 20.))
+                    .h(px(h + 20.))
+                    .children((0..4).map(|i| develop::bracket(i, 0., with_alpha(glow_c, 0.7))))
+                    .with_animation(SharedString::from(format!("lb-vf-{key}")), glass::delayed(220, 420), |d, t| {
+                        d.opacity(glass::ease_out_cubic(t))
+                    })
+            });
 
             let image = div()
                 .absolute()
@@ -242,6 +267,8 @@ impl Muralist {
                     ))
                 })
                 .children(loupe)
+                .children(hud)
+                .children(lock)
                 // Opening grows in; browsing slides in from the travel direction.
                 .with_animation(
                     SharedString::from(format!("lb-in-{key}-{}", self.lb_dir)),
@@ -264,6 +291,7 @@ impl Muralist {
                 .left_0()
                 .size_full()
                 .cursor_pointer()
+                .children(viewfinder)
                 .child(image)
                 .on_click(cx.listener(|this, ev: &ClickEvent, _, cx| {
                     if this.lb_loupe {
@@ -315,9 +343,26 @@ impl Muralist {
         let more_pages = self.tab == Tab::Discover && self.page < self.last_page;
         let counter = ix.map(|i| format!("{} / {}{}", i + 1, items.len(), if more_pages { "+" } else { "" }));
 
+        let decoding = title.clone();
         let left_pill = pill(h_flex())
             .pl_4()
-            .child(div().font_weight(FontWeight::SEMIBOLD).text_color(white()).mr_1().child(title))
+            .child(
+                v_flex()
+                    .mr_1()
+                    .child(div().font_weight(FontWeight::SEMIBOLD).text_color(white()).with_animation(
+                        SharedString::from(format!("lb-decode-{key}")),
+                        Animation::new(Duration::from_millis(650)),
+                        move |d, t| d.child(headers::scrambled(&decoding, t)),
+                    ))
+                    // Its palette, drawn in under the name.
+                    .child(h_flex().gap(px(2.)).children(colors.iter().take(6).enumerate().map(|(i, c)| {
+                        div().h(px(3.)).rounded_full().bg(*c).with_animation(
+                            SharedString::from(format!("lb-pal-{key}-{i}")),
+                            glass::delayed(i as u64 * 60, 260),
+                            |d, t| d.w(px(14. * glass::ease_out_cubic(t))),
+                        )
+                    }))),
+            )
             .children(dims.map(|(w, h)| chip(format!("{w}x{h}"))))
             .when_some(purity, |d, purity| {
                 let c = purity_color(purity);
@@ -388,16 +433,52 @@ impl Muralist {
 
         let has_prev = ix.is_some_and(|i| i > 0);
         let has_next = ix.is_some_and(|i| i + 1 < items.len()) || more_pages;
-        let arrow = |id: &'static str, name: &'static str, left: bool| {
+        // Each arrow peeks the wallpaper it leads to while hovered.
+        let thumb_at = |this: &mut Self, j: Option<usize>| {
+            let item = j.and_then(|j| items.get(j))?;
+            match item {
+                Item::Remote(w) => this.remote_thumb(w, false),
+                Item::Local(path) => this.local_thumb(path),
+            }
+        };
+        let prev_thumb = thumb_at(self, ix.and_then(|i| i.checked_sub(1)));
+        let next_thumb = thumb_at(self, ix.map(|i| i + 1));
+        let arrow = |id: &'static str, name: &'static str, left: bool, peek: Option<std::path::PathBuf>| {
             kit::Btn::new(id)
                 .icon(name)
                 .lg()
                 .round()
                 .render()
+                .group(id)
                 .occlude()
                 .absolute()
                 .top(px(TOP + stage_h / 2. - 21.))
                 .map(|d| if left { d.left(px(22.)) } else { d.left(px(stage_x + stage_w + 22.)) })
+                .when_some(peek, |d, t| {
+                    let (pw, ph) = (150., 94.);
+                    d.child(
+                        div()
+                            .absolute()
+                            .top(px(21. - ph / 2.))
+                            .map(|d| if left { d.left(px(52.)) } else { d.right(px(52.)) })
+                            .w(px(pw))
+                            .h(px(ph))
+                            .rounded_lg()
+                            .bg(hsla(0., 0., 0., 0.6))
+                            .border_2()
+                            .border_color(with_alpha(glow_c, 0.8))
+                            .shadow(glass::ambilight(glow_c, 24., 0.5))
+                            .invisible()
+                            .group_hover(id, |s| s.visible())
+                            .child(
+                                div()
+                                    .absolute()
+                                    .top(px(2.))
+                                    .left(px(2.))
+                                    .child(radius(boxed(img(t), pw - 4., ph - 4.).object_fit(ObjectFit::Cover), 6.)),
+                            ),
+                    )
+                })
         };
 
         let filmstrip = (!zoom).then(|| self.render_filmstrip(&items, ix, glow_c, cx));
@@ -406,7 +487,7 @@ impl Muralist {
         let _ = (&colors, &url);
         let keys = self.lb_keys.then(|| self.render_lb_keys(cx));
         let progress = match phase {
-            FullPhase::Loading(b) => Some(b.fraction),
+            FullPhase::Loading(b) if zoom => Some(b.fraction),
             _ => None,
         };
 
@@ -441,6 +522,19 @@ impl Muralist {
                 ))
             })
             .child(div().absolute().top_0().left_0().size_full().bg(hsla(0., 0., 0., 0.5)))
+            // Slow light drifting around the room in the picture's colors.
+            .children(colors.iter().take(2).enumerate().map(|(k, c)| {
+                let c = Hsla { s: c.s.max(0.4), l: c.l.clamp(0.35, 0.65), a: 1., ..*c };
+                let phase = k as f32 * std::f32::consts::PI;
+                div().absolute().size(px(4.)).rounded_full().shadow(glass::ambilight(c, 420., 0.22)).with_animation(
+                    SharedString::from(format!("lb-drift-{k}")),
+                    Animation::new(Duration::from_secs(26)).repeat(),
+                    move |d, t| {
+                        let a = t * std::f32::consts::TAU + phase;
+                        d.left(px(cw / 2. + a.cos() * cw * 0.32)).top(px(ch / 2. + (a * 1.3).sin() * ch * 0.26))
+                    },
+                )
+            }))
             .child(div().absolute().top_0().left_0().right_0().h(px(200.)).bg(linear_gradient(
                 180.,
                 linear_color_stop(hsla(0., 0., 0., 0.55), 0.),
@@ -467,13 +561,13 @@ impl Muralist {
             })
             .when(has_prev && !zoom, |d| {
                 d.child(
-                    arrow("lb-prev", "chevron-left", true)
+                    arrow("lb-prev", "chevron-left", true, prev_thumb.clone())
                         .on_click(cx.listener(|this, _, window, cx| this.lightbox_step(-1, window, cx))),
                 )
             })
             .when(has_next && !zoom, |d| {
                 d.child(
-                    arrow("lb-next", "chevron-right", false)
+                    arrow("lb-next", "chevron-right", false, next_thumb.clone())
                         .on_click(cx.listener(|this, _, window, cx| this.lightbox_step(1, window, cx))),
                 )
             })
@@ -899,30 +993,60 @@ impl Muralist {
                     Item::Remote(w) => self.remote_thumb(w, false),
                     Item::Local(path) => self.local_thumb(path),
                 };
-                let (w, h) = if current { (140., 88.) } else { (104., 66.) };
-                // Fade with distance from the current frame.
-                let fade = 1. - (i as f32 - ix as f32).abs() * 0.1;
-                div()
+                // Cover flow: frames shrink and fade with distance from the
+                // current one, which stands lifted in its own light.
+                let dist = (i as f32 - ix as f32).abs();
+                let scale = (1. - dist * 0.13).max(0.5);
+                let (w, h) = (124. * scale, 78. * scale);
+                let own = gridmodes::first_color(&items[i], &self.local_palettes).map_or(glow_c, |c| Hsla {
+                    s: c.s.max(0.45),
+                    l: 0.6,
+                    a: 1.,
+                    ..c
+                });
+                let frame = div()
                     .id(("film", i))
+                    .relative()
                     .flex_none()
                     .w(px(w))
                     .h(px(h))
                     .rounded_lg()
-                    .overflow_hidden()
                     .bg(hsla(0., 0., 0., 0.4))
-                    .border_2()
                     .cursor_pointer()
+                    .when_some(thumb, |d, t| {
+                        d.child(
+                            div()
+                                .absolute()
+                                .top(px(2.))
+                                .left(px(2.))
+                                .child(radius(boxed(img(t), w - 4., h - 4.).object_fit(ObjectFit::Cover), 6.)),
+                        )
+                    })
+                    .child(div().absolute().inset_0().rounded_lg().border_2().border_color(if current {
+                        own
+                    } else {
+                        hsla(0., 0., 1., 0.07)
+                    }))
                     .map(|d| {
                         if current {
-                            d.border_color(glow_c)
+                            d.shadow(glass::ambilight(own, 24., 0.75))
                         } else {
-                            d.border_color(hsla(0., 0., 1., 0.06))
-                                .opacity(fade.max(0.35) * 0.7)
-                                .hover(move |s| s.opacity(1.).border_color(with_alpha(glow_c, 0.7)))
+                            d.opacity((1. - dist * 0.11).max(0.3)).hover(move |s| s.opacity(1.))
                         }
                     })
-                    .when_some(thumb, |d, t| d.child(radius(img(t).size_full().object_fit(ObjectFit::Cover), 6.)))
-                    .on_click(cx.listener(move |this, _, window, cx| this.lightbox_jump(i, window, cx)))
+                    .on_click(cx.listener(move |this, _, window, cx| this.lightbox_jump(i, window, cx)));
+                // The current frame carries its place in the set beneath it.
+                v_flex()
+                    .items_center()
+                    .gap_1()
+                    .child(frame)
+                    .when(current, |d| {
+                        d.child(div().w(px(w * 0.6)).h(px(2.)).rounded_full().bg(own).with_animation(
+                            SharedString::from(format!("film-mark-{i}")),
+                            Animation::new(Duration::from_millis(320)).with_easing(ease_out_quint()),
+                            move |d, t| d.w(px(w * 0.6 * t)),
+                        ))
+                    })
                     .into_any_element()
             })
             .collect();
@@ -935,7 +1059,8 @@ impl Muralist {
             .right_0()
             .h(px(FILM_H - 14.))
             .justify_center()
-            .items_center()
+            .items_end()
+            .pb_2()
             .gap_2()
             .children(frames)
             .into_any_element()
@@ -964,7 +1089,7 @@ impl Muralist {
 
         h_flex()
             .absolute()
-            .bottom(px(FILM_H + 12.))
+            .bottom(px(FILM_H + 20.))
             .left_0()
             .right_0()
             .justify_center()

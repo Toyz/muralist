@@ -1112,6 +1112,8 @@ pub struct Muralist {
     lb_scroll: ScrollHandle,
     /// Last pointer position while dragging in the lightbox, and whether it moved.
     lb_drag: Option<(Point<Pixels>, bool)>,
+    /// The original last seen downloading in the lightbox, to lock on when it lands.
+    lb_develop_watch: Option<String>,
     focus: FocusHandle,
 
     pool: ThumbPool,
@@ -1368,6 +1370,7 @@ impl Muralist {
             content: (1600., 1000.),
             lb_scroll: ScrollHandle::new(),
             lb_drag: None,
+            lb_develop_watch: None,
             focus: cx.focus_handle(),
             pool,
             thumbs: HashMap::new(),
