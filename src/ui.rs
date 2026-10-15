@@ -432,6 +432,8 @@ fn keycap(label: &'static str, p: Pal) -> Div {
 const NAV_HOLD_SECS: f32 = 3.5;
 /// Share of each image's turn spent fading in.
 const DISSOLVE_FADE: f32 = 0.3;
+/// Height of a nav tile.
+const NAV_TILE_H: f32 = 54.;
 /// Corner radius of the nav tiles.
 const NAV_TILE_R: f32 = 8.;
 
@@ -2216,15 +2218,17 @@ impl Muralist {
             let label_c = adaptive::readable(Hsla { l: c.l.max(0.62), ..c }, hsla(0., 0., 0.06, 1.), 4.5);
             let group = SharedString::from(format!("{id}-g"));
             let n = thumbs.len();
-            let layer =
-                |path: PathBuf, gray: bool| {
-                    // Rounded on the image itself (the tile's clip is square), and
-                    // inset under the edge so its soft corner stays hidden.
-                    div().absolute().top(px(1.)).left(px(1.)).right(px(1.)).bottom(px(1.)).child(radius(
-                        img(path).size_full().object_fit(ObjectFit::Cover).grayscale(gray),
-                        NAV_TILE_R - 1.,
-                    ))
-                };
+            let layer = |path: PathBuf, gray: bool| {
+                // Rounded on the image itself (the tile's clip is square), and
+                // inset under the edge so its soft corner stays hidden.
+                // Explicit height: a percentage of a box sized only by its
+                // insets doesn't resolve, and the image would fall back to
+                // its own aspect and hang past the tile.
+                div().absolute().top(px(1.)).left(px(1.)).right(px(1.)).h(px(NAV_TILE_H - 2.)).child(radius(
+                    img(path).w_full().h(px(NAV_TILE_H - 2.)).object_fit(ObjectFit::Cover).grayscale(gray),
+                    NAV_TILE_R - 1.,
+                ))
+            };
             // The active tile dissolves from one image to the next, so they
             // blend over time instead of sitting side by side.
             let montage = |gray: bool| -> Vec<AnyElement> {
@@ -2254,7 +2258,7 @@ impl Muralist {
                 .id(id)
                 .group(group.clone())
                 .relative()
-                .h(px(54.))
+                .h(px(NAV_TILE_H))
                 .map(|d| radius(d, NAV_TILE_R))
                 .overflow_hidden()
                 .cursor_pointer()

@@ -436,6 +436,7 @@ impl Muralist {
     /// in color on hover or when open, with its actions on hover.
     fn render_gallery_row(&mut self, ix: usize, cx: &mut Context<Self>) -> Stateful<Div> {
         const R: f32 = 8.;
+        const H: f32 = 58.;
         let p = pal();
         let covers = self.gallery_covers(ix, 1);
         let g: &Gallery = &self.galleries.list[ix];
@@ -457,13 +458,11 @@ impl Muralist {
 
         let picture = |gray: bool| {
             covers.first().cloned().map(|t| {
-                div()
-                    .absolute()
-                    .top(px(1.))
-                    .left(px(1.))
-                    .right(px(1.))
-                    .bottom(px(1.))
-                    .child(super::radius(img(t).size_full().object_fit(ObjectFit::Cover).grayscale(gray), R - 1.))
+                // Explicit height: see the nav tiles.
+                div().absolute().top(px(1.)).left(px(1.)).right(px(1.)).h(px(H - 2.)).child(super::radius(
+                    img(t).w_full().h(px(H - 2.)).object_fit(ObjectFit::Cover).grayscale(gray),
+                    R - 1.,
+                ))
             })
         };
         let status: Option<AnyElement> = match work {
@@ -542,7 +541,7 @@ impl Muralist {
             .id(("gallery-row", id))
             .group(group.clone())
             .relative()
-            .h(px(58.))
+            .h(px(H))
             .map(|d| super::radius(d, R))
             .overflow_hidden()
             .cursor_pointer()
