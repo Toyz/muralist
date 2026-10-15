@@ -239,14 +239,22 @@ impl Muralist {
     /// dashed suggestions for ambiguous words (click to apply).
     pub(super) fn render_query_chips(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let p = pal();
+        // Parsed again only when the text changes, not every frame.
         let raw = self.query.read(cx).value().to_string();
-        let parsed = smartq::parse(&raw);
+        let parsed = match &self.query_parsed {
+            Some((text, parsed)) if *text == raw => parsed.clone(),
+            _ => {
+                let parsed = std::rc::Rc::new(smartq::parse(&raw));
+                self.query_parsed = Some((raw.clone(), parsed.clone()));
+                parsed
+            }
+        };
         if parsed.chips.is_empty() && parsed.suggestions.is_empty() {
             return None;
         }
 
         let mut chips: Vec<AnyElement> = Vec::new();
-        for (i, chip) in parsed.chips.into_iter().enumerate() {
+        for (i, chip) in parsed.chips.iter().cloned().enumerate() {
             let words = chip.words.clone();
             let raw = raw.clone();
             let token = chip.explicit.clone();
@@ -346,7 +354,8 @@ impl Muralist {
 
         let suggestions: Vec<AnyElement> = parsed
             .suggestions
-            .into_iter()
+            .iter()
+            .cloned()
             .enumerate()
             .map(|(i, sug)| {
                 let words = sug.words.clone();

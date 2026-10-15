@@ -270,7 +270,19 @@ fn radius_bottom<E: Styled>(mut e: E, r: f32) -> E {
 const CARD_INNER_R: f32 = 10.;
 
 fn icon(name: &str) -> Icon {
-    Icon::empty().path(format!("icons/{name}.svg"))
+    // A hundred-odd icons draw every frame; build each path string once.
+    thread_local! {
+        static PATHS: RefCell<HashMap<String, SharedString>> = RefCell::new(HashMap::new());
+    }
+    let path = PATHS.with_borrow_mut(|paths| match paths.get(name) {
+        Some(path) => path.clone(),
+        None => {
+            let path = SharedString::from(format!("icons/{name}.svg"));
+            paths.insert(name.to_owned(), path.clone());
+            path
+        }
+    });
+    Icon::empty().path(path)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1015,6 +1027,8 @@ pub struct Muralist {
     tag_names: HashMap<u64, Option<crate::wallhaven::Tag>>,
     /// When a tag lookup last failed, to retry it later rather than never.
     tag_failed: HashMap<u64, Instant>,
+    /// The search box's text and what the smart query made of it.
+    query_parsed: Option<(String, Rc<smartq::Parsed>)>,
     /// Query text of the last search sent, and a counter for type-ahead debounce.
     last_query: String,
     type_gen: u64,
@@ -1295,6 +1309,7 @@ impl Muralist {
             similar: HashMap::new(),
             tag_names: HashMap::new(),
             tag_failed: HashMap::new(),
+            query_parsed: None,
             last_query: String::new(),
             type_gen: 0,
             search_focused: false,
@@ -1958,22 +1973,26 @@ impl Muralist {
 
     fn refresh_library(&mut self) {
         self.provenance = crate::provenance::Provenance::load();
+        // One metadata call per entry, from the listing itself.
         let mut files: Vec<(std::time::SystemTime, PathBuf)> = std::fs::read_dir(&self.cfg.download_dir)
             .into_iter()
             .flatten()
             .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.is_file() && is_image(p))
-            .map(|p| (p.metadata().and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH), p))
+            .filter_map(|e| {
+                let meta = e.metadata().ok().filter(std::fs::Metadata::is_file)?;
+                let path = e.path();
+                is_image(&path).then(|| (meta.modified().unwrap_or(std::time::UNIX_EPOCH), path))
+            })
             .collect();
-        files.sort_by(|a, b| b.0.cmp(&a.0));
+        files.sort_by_key(|f| std::cmp::Reverse(f.0));
+        // Whatever is up on the screens counts too, if it's still there.
+        let applied = self.applied.desktop.values().chain(self.applied.lock.values()).filter(|p| p.is_file()).cloned();
         let mut seen: HashSet<PathBuf> = HashSet::new();
         self.library = files
             .into_iter()
             .map(|(_, p)| p)
-            .chain(self.applied.desktop.values().cloned())
-            .chain(self.applied.lock.values().cloned())
-            .filter(|p| p.is_file() && !p.to_string_lossy().contains("-span-"))
+            .chain(applied)
+            .filter(|p| !p.to_string_lossy().contains("-span-"))
             .filter(|p| seen.insert(p.clone()))
             .collect();
     }
