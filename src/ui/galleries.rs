@@ -190,7 +190,7 @@ impl Muralist {
         self.set_status(format!("Saved as the smart gallery \"{name}\""), false, cx);
     }
 
-    fn delete_gallery(&mut self, id: u64, cx: &mut Context<Self>) {
+    pub(super) fn delete_gallery(&mut self, id: u64, cx: &mut Context<Self>) {
         self.galleries.remove(id);
         self.gallery_work.remove(&id);
         self.confirm_delete = None;
@@ -266,7 +266,7 @@ impl Muralist {
         .detach();
     }
 
-    fn set_offline(&mut self, id: u64, on: bool, cx: &mut Context<Self>) {
+    pub(super) fn set_offline(&mut self, id: u64, on: bool, cx: &mut Context<Self>) {
         if let Some(g) = self.galleries.get_mut(id) {
             g.offline = on;
         }
@@ -374,7 +374,7 @@ impl Muralist {
         self.refresh_gallery(id, cx);
     }
 
-    fn start_rename(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn start_rename(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
         let Some(name) = self.galleries.get(id).map(|g| g.name.clone()) else { return };
         self.renaming = Some(id);
         self.gallery_name.update(cx, |s, cx| s.set_value(name, window, cx));
@@ -393,7 +393,7 @@ impl Muralist {
     }
 
     /// Turns auto-rotate on from this gallery, or off if it already is.
-    fn toggle_rotation(&mut self, id: u64, cx: &mut Context<Self>) {
+    pub(super) fn toggle_rotation(&mut self, id: u64, cx: &mut Context<Self>) {
         let on = self.cfg.rotate_source == RotateSource::Gallery(id) && self.cfg.rotate_minutes > 0;
         if on {
             self.cfg.rotate_minutes = 0;
@@ -451,7 +451,16 @@ impl Muralist {
             })
         })
         .gap_2()
-        .children(rows)
+        .child(v_flex().gap_2().children(rows).on_children_prepainted({
+            // Where each tile sits, for the right-click popout to lift from.
+            let bounds = self.gallery_tile_bounds.clone();
+            let ids: Vec<u64> = self.galleries.list.iter().map(|g| g.id).collect();
+            move |rects: Vec<Bounds<Pixels>>, _, _| {
+                let mut map = bounds.borrow_mut();
+                map.clear();
+                map.extend(ids.iter().copied().zip(rects));
+            }
+        }))
         .when(count == 0, |d| {
             d.child(div().text_xs().text_color(p.muted).child(
                 "Collect wallpapers into galleries, then rotate through them. Drag a card onto a gallery to add it.",
@@ -661,6 +670,15 @@ impl Muralist {
                         this.add_to_gallery(id, items, cx);
                     }))
             })
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
+                    let origin = this.gallery_tile_bounds.borrow().get(&id).copied();
+                    let origin = origin.unwrap_or_else(|| Bounds::new(ev.position, size(px(240.), px(58.))));
+                    this.open_gallery_pop(id, origin, cx);
+                    cx.stop_propagation();
+                }),
+            )
             .on_click(cx.listener(move |this, _, _, cx| this.open_gallery(id, cx)))
     }
 

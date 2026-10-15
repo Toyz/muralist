@@ -4,6 +4,7 @@ mod details;
 mod drag;
 mod galleries;
 mod gallery_edit;
+mod gallery_pop;
 mod glass;
 mod gridmodes;
 mod history;
@@ -976,6 +977,10 @@ pub struct Muralist {
     lib_filter: library::LibFilter,
     lib_tag_query: Entity<InputState>,
     gallery_edit: Option<gallery_edit::GalleryDraft>,
+    gallery_pop: Option<gallery_pop::GalleryPop>,
+    gallery_pop_seq: u64,
+    /// Where each gallery tile sits in the sidebar, for the popout.
+    gallery_tile_bounds: Rc<RefCell<HashMap<u64, Bounds<Pixels>>>>,
     edit_name: Entity<InputState>,
     edit_query: Entity<InputState>,
     /// The gallery the Galleries tab shows.
@@ -1232,6 +1237,9 @@ impl Muralist {
             lib_filter: library::LibFilter::default(),
             lib_tag_query,
             gallery_edit: None,
+            gallery_pop: None,
+            gallery_pop_seq: 0,
+            gallery_tile_bounds: Rc::new(RefCell::new(HashMap::new())),
             edit_name: cx.new(|cx| InputState::new(window, cx).placeholder("Gallery name")),
             edit_query: cx.new(|cx| InputState::new(window, cx).placeholder("Search text")),
             gallery: None,
@@ -4381,6 +4389,7 @@ impl Render for Muralist {
         let picker = self.render_picker(cx);
         let sheet = self.render_sheet(cx);
         let gallery_editor = self.render_gallery_editor(cx);
+        let gallery_pop = self.render_gallery_pop(cx);
         let context = self.render_context(cx);
         let span_editor = self.render_span_editor(cx);
 
@@ -4394,6 +4403,11 @@ impl Render for Muralist {
                         cx.stop_propagation();
                         return;
                     }
+                }
+                if ev.keystroke.key == "escape" && this.gallery_pop.is_some() {
+                    this.close_gallery_pop(cx);
+                    cx.stop_propagation();
+                    return;
                 }
                 if ev.keystroke.key == "escape" && (this.context.is_some() || this.picker.is_some()) {
                     this.close_context(cx);
@@ -4458,6 +4472,7 @@ impl Render for Muralist {
             .when(!self.lightbox, |d| d.child(self.resize_handle(true, cx)).child(self.resize_handle(false, cx)))
             .children(sheet)
             .children(gallery_editor)
+            .children(gallery_pop)
             .children(picker)
             .children(context)
             .children(toast)
