@@ -16,6 +16,7 @@ mod history;
 mod kit;
 mod library;
 mod lightbox;
+mod minimap;
 mod peek;
 mod pipeline;
 mod rotate;
@@ -1036,6 +1037,8 @@ pub struct Muralist {
     /// The pointer is over the settings gear, which spins up.
     gear_hover: bool,
     gear_angle: f32,
+    /// Dragging the grid's minimap thumb, grabbed this far below its top.
+    grid_drag: Option<minimap::MinimapDrag>,
     /// How the fit lab looks at the selection: spanned or per screen.
     fit_mode: fitlab::FitMode,
     gear_tick: Instant,
@@ -1318,6 +1321,7 @@ impl Muralist {
             last_rotation: Instant::now(),
             gear_hover: false,
             gear_angle: 0.,
+            grid_drag: None,
             fit_mode: fitlab::FitMode::default(),
             gear_tick: Instant::now(),
             dossier_hover: None,
@@ -3747,8 +3751,10 @@ impl Muralist {
         let rows = if mosaic { self.justified.len() + 1 } else { count.div_ceil(cols) + 1 };
         // Rows repaint each frame; stale rects would mislead the predictor.
         self.card_bounds.borrow_mut().clear();
+        let minimap = self.render_minimap(&items, cx);
         div()
             .id("grid-area")
+            .relative()
             .flex_1()
             .min_h_0()
             .pt(px(GRID_PAD))
@@ -3765,7 +3771,10 @@ impl Muralist {
                     rows,
                     cx.processor(move |this, range: std::ops::Range<usize>, window, cx| {
                         // Infinite scroll: fetch the next page as the footer nears.
+                        // Not mid-drag: a page landing would move the thumb
+                        // away from the pointer, which would fetch another.
                         if this.tab == Tab::Discover
+                            && this.grid_drag.is_none()
                             && !this.searching
                             && this.page < this.last_page
                             && range.end + 3 >= rows
@@ -3778,6 +3787,7 @@ impl Muralist {
                 .size_full()
                 .track_scroll(&self.grid_scroll),
             )
+            .children(minimap)
             .into_any_element()
     }
 
@@ -4618,8 +4628,24 @@ impl Render for Muralist {
                         this.end_resize(cx);
                     }
                 }
+                if this.grid_drag.is_some() {
+                    if ev.pressed_button == Some(MouseButton::Left) {
+                        this.drag_minimap(ev.position.y, cx);
+                    } else {
+                        this.grid_drag = None;
+                        cx.notify();
+                    }
+                }
             }))
-            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| this.end_resize(cx)))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    this.end_resize(cx);
+                    if this.grid_drag.take().is_some() {
+                        cx.notify();
+                    }
+                }),
+            )
             .child(sidebar)
             .child(
                 v_flex()
