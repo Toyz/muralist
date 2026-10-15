@@ -131,11 +131,11 @@ impl Muralist {
         let (src, iw, ih) = match item {
             Item::Remote(wp) => {
                 let full = self.remote_full(wp, cx)?;
-                let (a, b) = wp.resolution.split_once('x')?;
-                (full, a.parse::<f32>().ok()?, b.parse::<f32>().ok()?)
+                let (a, b) = wp.dims()?;
+                (full, a as f32, b as f32)
             }
             Item::Local(path) => {
-                let (iw, ih) = image::image_dimensions(path).ok()?;
+                let (iw, ih) = self.local_dims_of(path)?;
                 (path.clone(), iw as f32, ih as f32)
             }
         };

@@ -7,6 +7,8 @@ use std::time::{Duration, Instant};
 use gpui_kit::*;
 
 use super::{Item, Muralist, Placement, Target, parse_hex};
+use std::sync::Arc;
+
 use crate::wallhaven::Wallpaper;
 
 const TICK: Duration = Duration::from_millis(70);
@@ -16,7 +18,7 @@ const LINGER: Duration = Duration::from_millis(700);
 
 pub(super) struct Reel {
     pub monitor: String,
-    pub outcome: Wallpaper,
+    pub outcome: Arc<Wallpaper>,
     stop_at: Instant,
     /// Index into the slot's pool while spinning.
     pub showing: usize,
@@ -25,7 +27,7 @@ pub(super) struct Reel {
 
 pub(super) struct Slot {
     pub reels: Vec<Reel>,
-    pub pool: Vec<Wallpaper>,
+    pub pool: Vec<Arc<Wallpaper>>,
     targets: Vec<Target>,
     rng: u64,
     label: &'static str,
@@ -50,10 +52,7 @@ fn seed() -> u64 {
 
 /// Single-monitor shaped (not ultrawide, not portrait).
 pub(super) fn fits_one_screen(w: &Wallpaper) -> bool {
-    w.resolution
-        .split_once('x')
-        .and_then(|(a, b)| Some(a.parse::<f32>().ok()? / b.parse::<f32>().ok()?))
-        .is_some_and(|r| (1.3..=2.0).contains(&r))
+    w.aspect().is_some_and(|r| (1.3..=2.0).contains(&r))
 }
 
 /// sRGB -> CIE Lab (D65), so distances track perceived difference.
@@ -113,7 +112,7 @@ impl Muralist {
     }
 
     pub(super) fn spin(&mut self, cx: &mut Context<Self>) {
-        let mut candidates: Vec<Wallpaper> = self.results.iter().filter(|w| fits_one_screen(w)).cloned().collect();
+        let mut candidates: Vec<Arc<Wallpaper>> = self.results.iter().filter(|w| fits_one_screen(w)).cloned().collect();
         if candidates.len() < self.monitors.len() {
             candidates = self.results.clone();
         }
@@ -137,7 +136,7 @@ impl Muralist {
     }
 
     pub(super) fn harmonize(&mut self, cx: &mut Context<Self>) {
-        let candidates: Vec<Wallpaper> =
+        let candidates: Vec<Arc<Wallpaper>> =
             self.results.iter().filter(|w| fits_one_screen(w) && !w.colors.is_empty()).cloned().collect();
         let needed = self.monitors.len();
         if candidates.len() < needed || needed == 0 {
@@ -150,7 +149,7 @@ impl Muralist {
             _ => candidates.iter().max_by_key(|w| w.favorites).cloned().unwrap(),
         };
         let anchor_pal = palette(&anchor);
-        let mut ranked: Vec<(f32, Wallpaper)> = candidates
+        let mut ranked: Vec<(f32, Arc<Wallpaper>)> = candidates
             .into_iter()
             .filter(|w| w.id != anchor.id)
             .map(|w| (palette_distance(&anchor_pal, &palette(&w)), w))
@@ -164,9 +163,9 @@ impl Muralist {
         self.start_reels(outcome, "Harmonized", cx);
     }
 
-    fn start_reels(&mut self, outcome: Vec<(String, Wallpaper)>, label: &'static str, cx: &mut Context<Self>) {
+    fn start_reels(&mut self, outcome: Vec<(String, Arc<Wallpaper>)>, label: &'static str, cx: &mut Context<Self>) {
         let now = Instant::now();
-        let mut pool: Vec<Wallpaper> =
+        let mut pool: Vec<Arc<Wallpaper>> =
             self.results.iter().filter(|w| self.thumbs.contains_key(&format!("wh-{}", w.id))).cloned().collect();
         if pool.len() < 6 {
             pool = self.results.clone();
@@ -236,7 +235,7 @@ impl Muralist {
     }
 
     /// What a spinning (or freshly stopped) reel shows on `monitor`.
-    pub(super) fn reel_face(&self, monitor: &str) -> Option<(Wallpaper, bool)> {
+    pub(super) fn reel_face(&self, monitor: &str) -> Option<(Arc<Wallpaper>, bool)> {
         let Some(slot) = self.slot.as_ref() else {
             return self.landing.iter().find(|(m, _)| m == monitor).map(|(_, w)| (w.clone(), true));
         };
@@ -268,7 +267,7 @@ mod tests {
             thumbs: Thumbs { original: String::new(), small: String::new() },
             colors: Vec::new(),
         };
-        Reel { monitor: "DP-1".into(), outcome, stop_at, showing: 0, stopped }
+        Reel { monitor: "DP-1".into(), outcome: std::sync::Arc::new(outcome), stop_at, showing: 0, stopped }
     }
 
     #[test]

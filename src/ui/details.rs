@@ -14,7 +14,7 @@ use crate::wallhaven::{SearchParams, Sorting, Tag, Wallpaper};
 
 pub(super) enum Similar {
     Loading,
-    Ready(Vec<Wallpaper>),
+    Ready(Vec<std::sync::Arc<Wallpaper>>),
     Failed,
 }
 
@@ -178,8 +178,7 @@ impl Muralist {
 
     pub(super) fn render_fit_check(&mut self, w: &Wallpaper) -> Option<AnyElement> {
         let p = pal();
-        let (iw, ih) =
-            w.resolution.split_once('x').and_then(|(a, b)| Some((a.parse::<f32>().ok()?, b.parse::<f32>().ok()?)))?;
+        let (iw, ih) = w.dims().map(|(a, b)| (a as f32, b as f32))?;
         if self.monitors.is_empty() {
             return None;
         }
@@ -431,7 +430,9 @@ impl Muralist {
                         if let Some(q) = query {
                             this.similar_query.insert(id.clone(), q);
                         }
-                        Similar::Ready(list.into_iter().filter(|w| w.id != id).take(6).collect())
+                        Similar::Ready(
+                            list.into_iter().filter(|w| w.id != id).take(6).map(std::sync::Arc::new).collect(),
+                        )
                     }
                     Err(e) => {
                         eprintln!("similar to {id}: {e:#}");

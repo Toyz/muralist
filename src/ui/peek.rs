@@ -15,7 +15,7 @@ use crate::thumbs::remote_cache_path;
 use crate::wallhaven::Wallpaper;
 
 /// Images at least this much wider than tall are spanned across monitors.
-const SPAN_RATIO: f32 = 2.4;
+pub(super) const SPAN_RATIO: f32 = 2.4;
 
 enum PeekSource {
     Image { path: PathBuf, span: bool },

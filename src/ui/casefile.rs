@@ -76,8 +76,7 @@ impl Muralist {
         let key = w.id.clone();
 
         // ---- readouts ----
-        let mp =
-            w.resolution.split_once('x').and_then(|(a, b)| Some(a.parse::<f64>().ok()? * b.parse::<f64>().ok()? / 1e6));
+        let mp = w.dims().map(|(a, b)| f64::from(a) * f64::from(b) / 1e6);
         let readouts = div()
             .grid()
             .grid_cols(2)

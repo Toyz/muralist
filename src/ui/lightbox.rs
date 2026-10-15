@@ -190,9 +190,9 @@ impl Muralist {
         let items = self.current_items();
         let ix = self.selected_index(&items);
         if let (Some(i), false) = (ix, developing) {
-            self.prefetch(i + 1, cx);
+            self.prefetch_item(items.get(i + 1), cx);
             if i > 0 {
-                self.prefetch(i - 1, cx);
+                self.prefetch_item(items.get(i - 1), cx);
             }
         }
 

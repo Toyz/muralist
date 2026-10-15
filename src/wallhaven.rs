@@ -208,6 +208,17 @@ pub struct Wallpaper {
 }
 
 impl Wallpaper {
+    /// Pixel width and height, from `resolution` ("3840x2160").
+    pub fn dims(&self) -> Option<(u32, u32)> {
+        let (w, h) = self.resolution.split_once('x')?;
+        Some((w.parse().ok()?, h.parse().ok()?))
+    }
+
+    /// Width over height, if the resolution parses.
+    pub fn aspect(&self) -> Option<f32> {
+        self.dims().map(|(w, h)| w as f32 / h.max(1) as f32)
+    }
+
     /// File name used for the downloaded original, matching Wallhaven's own naming.
     pub fn file_name(&self) -> String {
         self.path.rsplit('/').next().map_or_else(|| format!("wallhaven-{}.jpg", self.id), str::to_owned)

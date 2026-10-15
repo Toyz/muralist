@@ -20,7 +20,7 @@ const COLLECTION_PAGES: u32 = 20;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Entry {
-    Wallhaven(Wallpaper),
+    Wallhaven(std::sync::Arc<Wallpaper>),
     Local(PathBuf),
 }
 
@@ -320,7 +320,7 @@ pub fn fetch_source(client: &Client, source: &Source, purity: [bool; 3]) -> Resu
             }
         }
     }
-    Ok(out.into_iter().map(Entry::Wallhaven).collect())
+    Ok(out.into_iter().map(|w| Entry::Wallhaven(std::sync::Arc::new(w))).collect())
 }
 
 #[cfg(test)]

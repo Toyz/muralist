@@ -555,6 +555,8 @@ struct Precog {
     prefetched: HashSet<String>,
     started: u32,
     hits: u32,
+    /// Originals already on disk, so never worth fetching.
+    on_disk: HashSet<String>,
 }
 
 /// Which horizontal bands of the original have landed.
@@ -797,9 +799,11 @@ struct GridLayout {
     card_h: f32,
 }
 
+/// Something in a grid. Wallpapers are shared, so cloning an item (which
+/// listeners, drags and caches do constantly) is a refcount bump.
 #[derive(Clone)]
 enum Item {
-    Remote(Wallpaper),
+    Remote(Arc<Wallpaper>),
     Local(PathBuf),
 }
 
@@ -920,7 +924,7 @@ pub struct Muralist {
     categories: [bool; 3],
     purity: [bool; 3],
 
-    results: Vec<Wallpaper>,
+    results: Vec<Arc<Wallpaper>>,
     page: u32,
     last_page: u32,
     total: u64,
@@ -1027,13 +1031,15 @@ pub struct Muralist {
     history_month: Option<(i32, u32)>,
     slot: Option<slot::Slot>,
     /// Spun wallpapers still downloading, by monitor.
-    landing: Vec<(String, Wallpaper)>,
+    landing: Vec<(String, Arc<Wallpaper>)>,
     /// Bumped by Discard, so downloads started before it don't re-stage.
     stage_gen: u64,
     /// Mosaic rows: per row, (item index, card width).
     justified: Vec<Vec<(usize, f32)>>,
     justified_h: f32,
-    local_dims: HashMap<PathBuf, (u32, u32)>,
+    /// What `justified` was computed from, to skip recomputing it.
+    justified_key: u64,
+    local_dims: HashMap<PathBuf, Option<(u32, u32)>>,
     /// Card under the pointer and where on it (0..1), for the holo glare.
     holo: Option<(usize, f32, f32)>,
     peek: Option<peek::Peek>,
@@ -1291,6 +1297,7 @@ impl Muralist {
             stage_gen: 0,
             justified: Vec::new(),
             justified_h: 200.,
+            justified_key: 0,
             local_dims: HashMap::new(),
             holo: None,
             peek: None,
@@ -1554,8 +1561,8 @@ impl Muralist {
         }
         self.preview_cache.update(cx, |cache, cx| cache.clear(window, cx));
         self.selected_dims = match &item {
-            Item::Remote(w) => w.resolution.split_once('x').and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?))),
-            Item::Local(path) => image::image_dimensions(path).ok(),
+            Item::Remote(w) => w.dims(),
+            Item::Local(path) => self.local_dims_of(path),
         };
         match &item {
             Item::Remote(w) => {
@@ -1689,12 +1696,16 @@ impl Muralist {
             Tab::History => Vec::new(),
         };
         if self.cfg.rainbow {
-            // Stable, so equal hues keep their search order.
-            items.sort_by(|a, b| {
-                let ka = gridmodes::hue_key(&gridmodes::item_colors(a, &self.local_palettes));
-                let kb = gridmodes::hue_key(&gridmodes::item_colors(b, &self.local_palettes));
-                ka.partial_cmp(&kb).unwrap_or(std::cmp::Ordering::Equal)
-            });
+            // Keyed once per item; stable, so equal hues keep search order.
+            let mut keyed: Vec<((u8, f32), Item)> = items
+                .into_iter()
+                .map(|i| {
+                    let first = gridmodes::first_color(&i, &self.local_palettes);
+                    (gridmodes::hue_key(first.as_slice()), i)
+                })
+                .collect();
+            keyed.sort_by(|a, b| a.0.0.cmp(&b.0.0).then(a.0.1.total_cmp(&b.0.1)));
+            items = keyed.into_iter().map(|(_, i)| i).collect();
         }
         items
     }
@@ -1702,19 +1713,21 @@ impl Muralist {
     /// Width over height of an item's full image.
     fn item_aspect(&mut self, item: &Item) -> f32 {
         let dims = match item {
-            Item::Remote(w) => {
-                w.resolution.split_once('x').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?)))
-            }
-            Item::Local(path) => {
-                if !self.local_dims.contains_key(path)
-                    && let Ok(d) = image::image_dimensions(path)
-                {
-                    self.local_dims.insert(path.clone(), d);
-                }
-                self.local_dims.get(path).copied()
-            }
+            Item::Remote(w) => w.dims(),
+            Item::Local(path) => self.local_dims_of(path),
         };
         dims.map_or(1.6, |(w, h)| w as f32 / h.max(1) as f32)
+    }
+
+    /// A saved file's pixel size, read from its header once. Failures are
+    /// remembered too, so an unreadable file isn't reopened every frame.
+    fn local_dims_of(&mut self, path: &Path) -> Option<(u32, u32)> {
+        if let Some(known) = self.local_dims.get(path) {
+            return *known;
+        }
+        let dims = image::image_dimensions(path).ok();
+        self.local_dims.insert(path.to_owned(), dims);
+        dims
     }
 
     fn selected_index(&self, items: &[Item]) -> Option<usize> {
@@ -1757,13 +1770,13 @@ impl Muralist {
             self.full.insert(w.id.clone(), FullState::Ready(cached.clone()));
             return Some(cached);
         }
-        self.start_full(w.clone(), SELECTED_WORKERS, cx);
+        self.start_full(Arc::new(w.clone()), SELECTED_WORKERS, cx);
         None
     }
 
     /// Fetch the original on its own lane (not behind queued thumbnails),
     /// over parallel range requests.
-    fn start_full(&mut self, w: Wallpaper, workers: usize, cx: &mut Context<Self>) {
+    fn start_full(&mut self, w: Arc<Wallpaper>, workers: usize, cx: &mut Context<Self>) {
         let progress = Arc::new(Progress::default());
         self.full.insert(w.id.clone(), FullState::Loading { progress: progress.clone() });
         let id = w.id.clone();
@@ -1975,11 +1988,11 @@ impl Muralist {
                     Ok(resp) => {
                         if reset {
                             this.remember_search(&raw, &resp.data);
-                            this.results = resp.data;
+                            this.results = resp.data.into_iter().map(Arc::new).collect();
                             this.deal();
                             this.grid_scroll.scroll_to_item(0, ScrollStrategy::Top);
                         } else {
-                            this.results.extend(resp.data);
+                            this.results.extend(resp.data.into_iter().map(Arc::new));
                         }
                         this.page = resp.meta.current_page.max(1);
                         this.last_page = resp.meta.last_page.max(1);
@@ -2283,7 +2296,7 @@ impl Muralist {
         let tab = self.tab;
 
         // A few thumbnails per tab.
-        let results: Vec<Wallpaper> = self.results.iter().take(3).cloned().collect();
+        let results: Vec<Arc<Wallpaper>> = self.results.iter().take(3).cloned().collect();
         let discover: Vec<PathBuf> = results.iter().filter_map(|w| self.remote_thumb(w, false)).collect();
         let latest: Vec<PathBuf> = self.library.iter().take(3).cloned().collect();
         let library: Vec<PathBuf> = latest.iter().filter_map(|path| self.local_thumb(path)).collect();
@@ -3560,9 +3573,8 @@ impl Muralist {
     }
 
     /// One virtualized row of cards (or the footer, as the last row).
-    fn render_grid_row(&mut self, row: usize, cx: &mut Context<Self>) -> AnyElement {
+    fn render_grid_row(&mut self, row: usize, items: &[Item], cx: &mut Context<Self>) -> AnyElement {
         let GridLayout { cols, card_w, card_h } = self.grid_layout;
-        let items = self.current_items();
         let mosaic = self.cfg.layout == GridMode::Mosaic;
 
         let (start, row_h, cards): (usize, f32, Vec<AnyElement>) = if mosaic {
@@ -3584,11 +3596,11 @@ impl Muralist {
                 return self.render_footer(row_h, cx);
             }
             let cards = items
-                .into_iter()
+                .iter()
                 .enumerate()
                 .skip(start)
                 .take(cols)
-                .map(|(ix, item)| self.render_card(ix, item, card_w, card_h, cx))
+                .map(|(ix, item)| self.render_card(ix, item.clone(), card_w, card_h, cx))
                 .collect();
             (start, row_h, cards)
         };
@@ -3612,7 +3624,9 @@ impl Muralist {
     }
 
     fn render_grid(&mut self, grid_w: f32, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let count = self.current_items().len();
+        // Built once a frame and shared by every row.
+        let items = Rc::new(self.current_items());
+        let count = items.len();
 
         let cols = (((grid_w + GRID_GAP) / (MIN_CARD_W + GRID_GAP)).floor() as usize).max(1);
         let card_w = ((grid_w - GRID_GAP * (cols - 1) as f32) / cols as f32).floor();
@@ -3625,10 +3639,27 @@ impl Muralist {
 
         let mosaic = self.cfg.layout == GridMode::Mosaic;
         if mosaic {
-            let items = self.current_items();
-            let aspects: Vec<f32> = items.iter().map(|i| self.item_aspect(i)).collect();
-            self.justified_h = (grid_w / 4.6).clamp(160., 240.).floor();
-            self.justified = gridmodes::justify(&aspects, grid_w, self.justified_h, GRID_GAP);
+            // Re-justify only when the width, the items or their known
+            // shapes change, not every frame.
+            let key = {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                grid_w.to_bits().hash(&mut h);
+                self.local_dims.len().hash(&mut h);
+                for item in items.iter() {
+                    match item {
+                        Item::Remote(w) => w.id.hash(&mut h),
+                        Item::Local(p) => p.hash(&mut h),
+                    }
+                }
+                h.finish()
+            };
+            if key != self.justified_key {
+                let aspects: Vec<f32> = items.iter().map(|i| self.item_aspect(i)).collect();
+                self.justified_h = (grid_w / 4.6).clamp(160., 240.).floor();
+                self.justified = gridmodes::justify(&aspects, grid_w, self.justified_h, GRID_GAP);
+                self.justified_key = key;
+            }
         }
 
         // +1 row for the footer (spinner / load more / end marker).
@@ -3660,7 +3691,7 @@ impl Muralist {
                         {
                             cx.on_next_frame(window, |this, _, cx| this.search(false, cx));
                         }
-                        range.map(|row| this.render_grid_row(row, cx)).collect::<Vec<_>>()
+                        range.map(|row| this.render_grid_row(row, &items, cx)).collect::<Vec<_>>()
                     }),
                 )
                 .size_full()
@@ -3856,7 +3887,7 @@ impl Muralist {
                             .render(),
                     )
                     .children(remote.clone().map(|w| {
-                        let url = w.url;
+                        let url = w.url.clone();
                         kit::Btn::new("pv-open")
                             .icon("external-link")
                             .ghost()
@@ -4339,18 +4370,39 @@ impl Muralist {
         }
     }
 
+    /// The item at grid position `ix`, without building the whole list
+    /// when the grid is plain search results.
+    fn item_at(&self, ix: usize) -> Option<Item> {
+        if self.tab == Tab::Discover && !self.cfg.rainbow {
+            return self.results.get(ix).cloned().map(Item::Remote);
+        }
+        self.current_items().into_iter().nth(ix)
+    }
+
     /// Speculatively fetch the original for card `ix`.
     fn prefetch(&mut self, ix: usize, cx: &mut Context<Self>) {
+        let item = self.item_at(ix);
+        self.prefetch_item(item.as_ref(), cx);
+    }
+
+    /// Speculatively fetch `item`'s original. Each wallpaper is looked at
+    /// once: the lightbox asks for its neighbours every frame.
+    fn prefetch_item(&mut self, item: Option<&Item>, cx: &mut Context<Self>) {
         if !self.cfg.precog {
             return;
         }
-        let Some(Item::Remote(w)) = self.current_items().into_iter().nth(ix) else {
+        let Some(Item::Remote(w)) = item else {
             return;
         };
-        if self.full.contains_key(&w.id) || self.cfg.download_dir.join(w.file_name()).is_file() {
+        let w = w.clone();
+        if self.full.contains_key(&w.id)
+            || self.precog.prefetched.contains(&w.id)
+            || self.precog.on_disk.contains(&w.id)
+        {
             return;
         }
-        if remote_cache_path(&full_key(&w), &w.path).is_file() {
+        if self.cfg.download_dir.join(w.file_name()).is_file() || remote_cache_path(&full_key(&w), &w.path).is_file() {
+            self.precog.on_disk.insert(w.id.clone());
             return;
         }
         // Keep a few guesses in flight at most; drop the stalest.

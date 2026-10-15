@@ -45,6 +45,17 @@ pub(super) fn hue_key(colors: &[Hsla]) -> (u8, f32) {
     }
 }
 
+/// An item's leading color, without building its whole palette.
+pub(super) fn first_color(
+    item: &Item,
+    local: &std::collections::HashMap<std::path::PathBuf, Vec<Hsla>>,
+) -> Option<Hsla> {
+    match item {
+        Item::Remote(w) => w.colors.first().and_then(|c| parse_hex(c)),
+        Item::Local(path) => local.get(path).and_then(|v| v.first().copied()),
+    }
+}
+
 pub(super) fn item_colors(item: &Item, local: &std::collections::HashMap<std::path::PathBuf, Vec<Hsla>>) -> Vec<Hsla> {
     match item {
         Item::Remote(w) => w.colors.iter().filter_map(|c| parse_hex(c)).collect(),

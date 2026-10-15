@@ -174,15 +174,8 @@ impl Job {
         };
 
         // Sometimes: one ultrawide across everything.
-        let ultrawide: Vec<&Wallpaper> = pool
-            .iter()
-            .filter(|w| {
-                w.resolution
-                    .split_once('x')
-                    .and_then(|(a, b)| Some(a.parse::<f32>().ok()? / b.parse::<f32>().ok()?))
-                    .is_some_and(|r| r >= 2.4)
-            })
-            .collect();
+        let ultrawide: Vec<&Wallpaper> =
+            pool.iter().filter(|w| w.aspect().is_some_and(|r| r >= super::peek::SPAN_RATIO)).collect();
         if self.monitors.len() > 1 && !ultrawide.is_empty() && rng(seed) % 100 < SPAN_CHANCE {
             let pick = ultrawide[(rng(seed) % ultrawide.len() as u64) as usize];
             let path = download(pick)?;

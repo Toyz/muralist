@@ -129,9 +129,11 @@ impl Muralist {
         // A saved file whose origin is known reads as that Wallhaven
         // wallpaper: purity, tags, similar and all.
         let item = match &selected {
-            Item::Local(path) => {
-                self.provenance.of(path).map(|r| Item::Remote(r.wallpaper.clone())).unwrap_or(selected.clone())
-            }
+            Item::Local(path) => self
+                .provenance
+                .of(path)
+                .map(|r| Item::Remote(std::sync::Arc::new(r.wallpaper.clone())))
+                .unwrap_or(selected.clone()),
             Item::Remote(_) => selected.clone(),
         };
         let remote = match &item {
@@ -171,11 +173,12 @@ impl Muralist {
         let ph = pw / aspect;
         let (px_, py_) = (PIC_PAD + (box_w - pw) / 2., PIC_PAD + (box_h - ph) / 2.);
 
-        let similar: Vec<crate::wallhaven::Wallpaper> = match remote.as_ref().and_then(|w| self.similar.get(&w.id)) {
-            Some(details::Similar::Ready(list)) => list.clone(),
-            _ => Vec::new(),
-        };
-        let mut ranked: Vec<(f32, crate::wallhaven::Wallpaper)> =
+        let similar: Vec<std::sync::Arc<crate::wallhaven::Wallpaper>> =
+            match remote.as_ref().and_then(|w| self.similar.get(&w.id)) {
+                Some(details::Similar::Ready(list)) => list.clone(),
+                _ => Vec::new(),
+            };
+        let mut ranked: Vec<(f32, std::sync::Arc<crate::wallhaven::Wallpaper>)> =
             similar.iter().map(|w| (palette_match(&colors, &hexes(&w.colors)), w.clone())).collect();
         ranked.sort_by(|a, b| b.0.total_cmp(&a.0));
         let compare = self.sheet_compare.and_then(|i| ranked.get(i).cloned());
@@ -187,14 +190,10 @@ impl Muralist {
                 super::FullPhase::Loading(b) => Some(b.fraction.unwrap_or(0.)),
                 _ => None,
             };
-            let (iw, ih) = w
-                .resolution
-                .split_once('x')
-                .and_then(|(a, b)| Some((a.parse::<f32>().ok()?, b.parse::<f32>().ok()?)))
-                .unwrap_or((pw, ph));
+            let (iw, ih) = w.dims().map_or((pw, ph), |(a, b)| (a as f32, b as f32));
             let cover = (pw / 2. / iw).max(ph / ih) * self.scale;
             let fit = full.and_then(|f| self.fitted(&f, (iw * cover).ceil() as u32, (ih * cover).ceil() as u32));
-            (m, w.id, thumb, fit, pulling)
+            (m, w.id.clone(), thumb, fit, pulling)
         });
         // The picture itself, downscaled for exactly its box once the
         // original is here, over its thumbnail until then.
@@ -660,7 +659,7 @@ impl Muralist {
     fn render_lineup(
         &mut self,
         w: &crate::wallhaven::Wallpaper,
-        ranked: &[(f32, crate::wallhaven::Wallpaper)],
+        ranked: &[(f32, std::sync::Arc<crate::wallhaven::Wallpaper>)],
         c: Hsla,
         cx: &mut Context<Self>,
     ) -> AnyElement {
