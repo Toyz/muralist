@@ -194,7 +194,7 @@ impl Muralist {
                             Animation::new(std::time::Duration::from_millis(1400))
                                 .repeat()
                                 .with_easing(pulsating_between(0.75, 1.)),
-                            |d, t| d.opacity(t),
+                            gpui_kit::Styled::opacity,
                         ),
                 )
                 .into_any_element(),

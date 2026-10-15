@@ -68,11 +68,8 @@ struct Job {
 impl Job {
     /// Puts up a new set. Also returns where in-order playback is up to.
     fn run(self) -> Result<(BTreeMap<String, PathBuf>, Option<usize>)> {
-        let mut seed = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(7)
-            | 1;
+        let mut seed =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(7, |d| d.as_nanos() as u64) | 1;
         let (lo, hi) = if self.match_time { wanted_brightness() } else { (0., 1.) };
         let (map, cursor) = match self.source {
             RotateSource::Search => (self.from_search(lo, hi, &mut seed)?, None),
@@ -251,7 +248,7 @@ impl Muralist {
                         let minutes = this.cfg.rotate_minutes;
                         let due = minutes > 0
                             && !this.rotating
-                            && this.last_rotation.elapsed() >= Duration::from_secs(minutes as u64 * 60);
+                            && this.last_rotation.elapsed() >= Duration::from_secs(u64::from(minutes) * 60);
                         if due {
                             this.rotate_now(cx);
                         } else if minutes > 0 {
@@ -358,7 +355,7 @@ impl Muralist {
         if self.rotating {
             return Some("rotating now".into());
         }
-        let left = (minutes as u64 * 60).saturating_sub(self.last_rotation.elapsed().as_secs());
+        let left = (u64::from(minutes) * 60).saturating_sub(self.last_rotation.elapsed().as_secs());
         Some(if left >= 60 { format!("next in {} min", left.div_ceil(60)) } else { "next in under a minute".into() })
     }
 }

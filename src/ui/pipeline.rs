@@ -78,7 +78,7 @@ fn step(
             .flex_1()
             .min_w_0()
             .gap_3()
-            .when(!last, |d| d.pb_6())
+            .when(!last, gpui_kit::Styled::pb_6)
             .child(
                 h_flex()
                     .h(px(22.))
@@ -179,7 +179,7 @@ impl Muralist {
                     .h(px(tile_h))
                     .map(|d| radius(d, TILE_R))
                     .bg(p.bg)
-                    .when(has_selection, |d| d.cursor_pointer())
+                    .when(has_selection, gpui_kit::Styled::cursor_pointer)
                     .when_some(has_selection.then_some(()), |d, _| {
                         d.tooltip(|window, cx| Tooltip::new("Put the selected wallpaper here").build(window, cx))
                     })
@@ -282,7 +282,7 @@ impl Muralist {
                         }
                     }))
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.assign(vec![target], Placement::Monitor(name.clone()), cx)
+                        this.assign(vec![target], Placement::Monitor(name.clone()), cx);
                     }))
             })
             .collect();
@@ -414,7 +414,7 @@ impl Muralist {
                                         segment("lm-per", "A picture per screen", lock_mode == LockMode::PerMonitor, p)
                                             .px_2()
                                             .on_click(cx.listener(|this, _, _, cx| {
-                                                this.set_lock_mode(LockMode::PerMonitor, cx)
+                                                this.set_lock_mode(LockMode::PerMonitor, cx);
                                             })),
                                     )
                                     .child(

@@ -123,13 +123,12 @@ impl Muralist {
     pub(super) fn show_galleries(&mut self, cx: &mut Context<Self>) {
         let id =
             self.gallery.filter(|id| self.galleries.get(*id).is_some()).or(self.galleries.list.first().map(|g| g.id));
-        match id {
-            Some(id) => self.open_gallery(id, cx),
-            None => {
-                self.tab = Tab::Galleries;
-                self.gallery = None;
-                cx.notify();
-            }
+        if let Some(id) = id {
+            self.open_gallery(id, cx)
+        } else {
+            self.tab = Tab::Galleries;
+            self.gallery = None;
+            cx.notify();
         }
     }
 
@@ -362,12 +361,11 @@ impl Muralist {
         let existing = self.galleries.list.iter().find(
             |g| matches!(&g.source, Source::Wallhaven { user: u, collection, .. } if *u == user && *collection == c.id),
         );
-        let id = match existing {
-            Some(g) => g.id,
-            None => {
-                let name = self.galleries.unique_name(&c.label);
-                self.galleries.create(name, Source::Wallhaven { user, collection: c.id, purity: None })
-            }
+        let id = if let Some(g) = existing {
+            g.id
+        } else {
+            let name = self.galleries.unique_name(&c.label);
+            self.galleries.create(name, Source::Wallhaven { user, collection: c.id, purity: None })
         };
         self.save_galleries(cx);
         self.open_gallery(id, cx);
@@ -533,7 +531,7 @@ impl Muralist {
             .right(px(6.))
             .gap_1()
             // Shown on hover, or while a delete waits for its second click.
-            .when(!deleting, |d| d.invisible().group_hover(group.clone(), |s| s.visible()))
+            .when(!deleting, |d| d.invisible().group_hover(group.clone(), gpui_kit::Styled::visible))
             .child(action("g-rename", "pencil", "Rename", false).on_click(cx.listener(move |this, _, window, cx| {
                 cx.stop_propagation();
                 this.open_gallery(id, cx);
@@ -609,7 +607,7 @@ impl Muralist {
                             .absolute()
                             .inset_0()
                             .invisible()
-                            .group_hover(group.clone(), |s| s.visible())
+                            .group_hover(group.clone(), gpui_kit::Styled::visible)
                             .children(picture(false)),
                     )
                 }
@@ -983,8 +981,8 @@ impl Muralist {
                 .children((0..4).map(|r| self.skeleton_row(r)))
                 .into_any_element();
         }
-        match &g.source {
-            Source::Manual => shell(
+        if g.source == Source::Manual {
+            shell(
                 "images",
                 "Nothing here yet",
                 "Drag wallpapers onto this gallery in the sidebar, or save one with the bookmark button.",
@@ -997,14 +995,10 @@ impl Muralist {
                     .child("Right-click any card to")
                     .child(keycap("save", p)),
             )
-            .into_any_element(),
-            _ => {
-                let id = g.id;
-                shell(
-                    "search-x",
-                    "Nothing came back",
-                    "The search or collection is empty for your current purity filter.",
-                )
+            .into_any_element()
+        } else {
+            let id = g.id;
+            shell("search-x", "Nothing came back", "The search or collection is empty for your current purity filter.")
                 .child(
                     kit::Btn::new("empty-refresh")
                         .label("Try again")
@@ -1012,7 +1006,6 @@ impl Muralist {
                         .on_click(cx.listener(move |this, _, _, cx| this.refresh_gallery(id, cx))),
                 )
                 .into_any_element()
-            }
         }
     }
 

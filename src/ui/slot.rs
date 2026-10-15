@@ -44,8 +44,7 @@ impl Slot {
 fn seed() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0x9e37_79b9_7f4a_7c15)
+        .map_or(0x9e37_79b9_7f4a_7c15, |d| d.as_nanos() as u64)
         | 1
 }
 
@@ -90,7 +89,7 @@ pub(super) fn palette_distance(a: &[[f32; 3]], b: &[[f32; 3]]) -> f32 {
         }
         total / weight
     };
-    (one_way(a, b) + one_way(b, a)) / 2.
+    f32::midpoint(one_way(a, b), one_way(b, a))
 }
 
 pub(super) fn palette(w: &Wallpaper) -> Vec<[f32; 3]> {
@@ -159,7 +158,7 @@ impl Muralist {
         ranked.sort_by(|a, b| a.0.total_cmp(&b.0));
 
         let order = self.monitor_order();
-        let mut picks = vec![anchor.clone()];
+        let mut picks = vec![anchor];
         picks.extend(ranked.into_iter().take(needed - 1).map(|(_, w)| w));
         let outcome = order.into_iter().zip(picks).collect();
         self.start_reels(outcome, "Harmonized", cx);

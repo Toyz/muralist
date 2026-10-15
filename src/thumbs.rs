@@ -147,7 +147,7 @@ fn run(client: &Client, job: &Job) -> Result<PathBuf> {
             let dist =
                 |a: [f32; 3], b: &[f32; 3]| (a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2);
             for px in img.pixels_mut() {
-                let rgb = px.0.map(|v| v as f32 / 255.);
+                let rgb = px.0.map(|v| f32::from(v) / 255.);
                 let nearest =
                     centers.iter().enumerate().min_by(|a, b| dist(rgb, a.1).total_cmp(&dist(rgb, b.1))).map(|(i, _)| i);
                 if nearest != Some(*index) {
@@ -182,7 +182,7 @@ fn run(client: &Client, job: &Job) -> Result<PathBuf> {
             // Darken so text over the glass stays readable even on a white
             // wallpaper; the glass is about atmosphere, not detail.
             for px in soft.pixels_mut() {
-                px.0 = px.0.map(|v| (v as f32 * 0.36) as u8);
+                px.0 = px.0.map(|v| (f32::from(v) * 0.36) as u8);
             }
             let file = std::fs::File::create(&dest)?;
             JpegEncoder::new_with_quality(std::io::BufWriter::new(file), 85).encode_image(&soft)?;
@@ -210,7 +210,8 @@ fn run(client: &Client, job: &Job) -> Result<PathBuf> {
             }
             std::fs::create_dir_all(&dir)?;
             let img = image::open(path)?;
-            let h = (img.height() as u64 * LOCAL_THUMB_WIDTH as u64 / img.width().max(1) as u64).max(1) as u32;
+            let h =
+                (u64::from(img.height()) * u64::from(LOCAL_THUMB_WIDTH) / u64::from(img.width().max(1))).max(1) as u32;
             img.thumbnail(LOCAL_THUMB_WIDTH, h).to_rgb8().save(&dest)?;
             Ok(dest)
         }
@@ -243,7 +244,7 @@ fn sweep_dir(dir: &Path, budget: u64, keep: &HashSet<PathBuf>) -> (u64, u64) {
         .flatten()
         .flatten()
         .filter_map(|e| {
-            let meta = e.metadata().ok().filter(|m| m.is_file())?;
+            let meta = e.metadata().ok().filter(std::fs::Metadata::is_file)?;
             Some((meta.modified().ok()?, meta.len(), e.path()))
         })
         .collect();
@@ -283,10 +284,10 @@ fn sanitize(key: &str) -> String {
 pub fn path_hash(path: &Path) -> u64 {
     let mut h = DefaultHasher::new();
     path.hash(&mut h);
-    if let Ok(meta) = std::fs::metadata(path) {
-        if let Ok(t) = meta.modified() {
-            t.hash(&mut h);
-        }
+    if let Ok(meta) = std::fs::metadata(path)
+        && let Ok(t) = meta.modified()
+    {
+        t.hash(&mut h);
     }
     h.finish()
 }

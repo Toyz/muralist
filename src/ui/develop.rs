@@ -18,7 +18,7 @@ const THICK: f32 = 2.;
 
 /// One L-shaped corner bracket, `inset` in from its corner.
 pub(super) fn bracket(corner: usize, inset: f32, c: Hsla) -> Div {
-    let (left, top) = (corner % 2 == 0, corner < 2);
+    let (left, top) = (corner.is_multiple_of(2), corner < 2);
     let arm = |horizontal: bool| {
         let d = div().absolute().bg(c);
         let d = if horizontal { d.w(px(ARM)).h(px(THICK)) } else { d.w(px(THICK)).h(px(ARM)) };
@@ -136,7 +136,7 @@ pub(super) fn hud(key: &str, bands: Bands, colors: &[Hsla], c: Hsla, h: f32) -> 
                     .child(div().size(px(5.)).rounded_full().bg(c).with_animation(
                         SharedString::from(format!("dev-rec-{key}")),
                         Animation::new(Duration::from_millis(700)).repeat().with_easing(pulsating_between(0.2, 1.)),
-                        |d, t| d.opacity(t),
+                        gpui_kit::Styled::opacity,
                     ))
                     .child(status)
                     .when(count > 1, |d| d.child(div().text_color(hsla(0., 0., 1., 0.5)).child(format!("x{count}")))),

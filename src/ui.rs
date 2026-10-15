@@ -115,7 +115,7 @@ fn thousands(n: u64) -> String {
     let digits = n.to_string();
     let mut out = String::new();
     for (i, ch) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i) % 3 == 0 {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(ch);
@@ -497,7 +497,7 @@ fn switch(on: bool, p: Pal) -> Div {
         .p(px(2.))
         .rounded_full()
         .bg(if on { p.accent } else { p.border_strong })
-        .when(on, |d| d.justify_end())
+        .when(on, gpui_kit::Styled::justify_end)
         .child(div().size(px(14.)).rounded_full().bg(white()))
 }
 
@@ -677,7 +677,7 @@ fn fade_in(id: impl Into<ElementId>, child: impl IntoElement) -> impl IntoElemen
     div().absolute().top_0().left_0().size_full().child(child).with_animation(
         id,
         Animation::new(std::time::Duration::from_millis(500)).with_easing(ease_out_quint()),
-        |d, t| d.opacity(t),
+        gpui_kit::Styled::opacity,
     )
 }
 
@@ -698,7 +698,7 @@ fn dir_size(path: &Path) -> u64 {
         .flatten()
         .map(|e| match e.file_type() {
             Ok(t) if t.is_dir() => dir_size(&e.path()),
-            _ => e.metadata().map(|m| m.len()).unwrap_or(0),
+            _ => e.metadata().map_or(0, |m| m.len()),
         })
         .sum()
 }
@@ -887,7 +887,7 @@ fn file_name(path: &Path) -> String {
 
 fn is_image(path: &Path) -> bool {
     matches!(
-        path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref(),
+        path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref(),
         Some("jpg" | "jpeg" | "png" | "webp")
     )
 }
@@ -1138,7 +1138,7 @@ impl Muralist {
                 if this.scope.is_some() && !this.query.read(cx).value().is_empty() {
                     this.scope = None;
                 }
-                this.search_soon(cx)
+                this.search_soon(cx);
             }
             _ => {}
         });
@@ -1538,19 +1538,19 @@ impl Muralist {
         if self.selected.as_ref().is_some_and(|s| same_item(s, &item)) {
             return;
         }
-        if let Item::Remote(w) = &item {
-            if self.precog.prefetched.remove(&w.id) {
-                self.precog.hits += 1;
-                self.precog.speculative.retain(|id| id != &w.id);
-            }
+        if let Item::Remote(w) = &item
+            && self.precog.prefetched.remove(&w.id)
+        {
+            self.precog.hits += 1;
+            self.precog.speculative.retain(|id| id != &w.id);
         }
         // Moving on: stop the previous original's download so it doesn't
         // compete with the new one.
-        if let Some(Item::Remote(prev)) = &self.selected {
-            if let Some(FullState::Loading { progress, .. }) = self.full.get(&prev.id) {
-                progress.cancel.store(true, Ordering::Relaxed);
-                self.full.remove(&prev.id);
-            }
+        if let Some(Item::Remote(prev)) = &self.selected
+            && let Some(FullState::Loading { progress, .. }) = self.full.get(&prev.id)
+        {
+            progress.cancel.store(true, Ordering::Relaxed);
+            self.full.remove(&prev.id);
         }
         self.preview_cache.update(cx, |cache, cx| cache.clear(window, cx));
         self.selected_dims = match &item {
@@ -1706,15 +1706,15 @@ impl Muralist {
                 w.resolution.split_once('x').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?)))
             }
             Item::Local(path) => {
-                if !self.local_dims.contains_key(path) {
-                    if let Ok(d) = image::image_dimensions(path) {
-                        self.local_dims.insert(path.clone(), d);
-                    }
+                if !self.local_dims.contains_key(path)
+                    && let Ok(d) = image::image_dimensions(path)
+                {
+                    self.local_dims.insert(path.clone(), d);
                 }
                 self.local_dims.get(path).copied()
             }
         };
-        dims.map(|(w, h)| w as f32 / h.max(1) as f32).unwrap_or(1.6)
+        dims.map_or(1.6, |(w, h)| w as f32 / h.max(1) as f32)
     }
 
     fn selected_index(&self, items: &[Item]) -> Option<usize> {
@@ -1846,11 +1846,11 @@ impl Muralist {
     }
 
     fn retry_full(&mut self, cx: &mut Context<Self>) {
-        if let Some(Item::Remote(w)) = &self.selected {
-            if matches!(self.full.get(&w.id), Some(FullState::Failed(_))) {
-                self.full.remove(&w.id);
-                cx.notify();
-            }
+        if let Some(Item::Remote(w)) = &self.selected
+            && matches!(self.full.get(&w.id), Some(FullState::Failed(_)))
+        {
+            self.full.remove(&w.id);
+            cx.notify();
         }
     }
 
@@ -1858,9 +1858,8 @@ impl Muralist {
     /// nor the lightbox ever waits on a resize.
     fn prewarm_fits(&mut self, src: &Path) {
         let base = self.preview_w();
-        let preview_h = image::image_dimensions(src)
-            .map(|(w, h)| preview_h_for(w as f32 / h.max(1) as f32, base))
-            .unwrap_or(PREVIEW_H);
+        let preview_h =
+            image::image_dimensions(src).map_or(PREVIEW_H, |(w, h)| preview_h_for(w as f32 / h.max(1) as f32, base));
         let w = self.fit_width();
         let h = (preview_h * self.scale).round() as u32;
         self.fitted(src, w, h);
@@ -1872,7 +1871,7 @@ impl Muralist {
     /// Preview box height for the current selection.
     fn preview_h(&self) -> f32 {
         let base = self.preview_w();
-        self.selected_dims.map(|(w, h)| preview_h_for(w as f32 / h.max(1) as f32, base)).unwrap_or(PREVIEW_H)
+        self.selected_dims.map_or(PREVIEW_H, |(w, h)| preview_h_for(w as f32 / h.max(1) as f32, base))
     }
 
     /// High-quality copy of `src` fitting `w`x`h` physical pixels.
@@ -2217,10 +2216,10 @@ impl Muralist {
                     for (target, images) in jobs {
                         match target {
                             Target::Desktop => {
-                                backend.desktop().context("no desktop backend")?.set(&images, &monitors)?
+                                backend.desktop().context("no desktop backend")?.set(&images, &monitors)?;
                             }
                             Target::Lock => {
-                                backend.lock().context("no lock screen")?.apply(&images, &monitors, lock_mode)?
+                                backend.lock().context("no lock screen")?.apply(&images, &monitors, lock_mode)?;
                             }
                         }
                         done.push((target, images));
@@ -2408,7 +2407,7 @@ impl Muralist {
                                 .absolute()
                                 .inset_0()
                                 .invisible()
-                                .group_hover(group.clone(), |s| s.visible())
+                                .group_hover(group.clone(), gpui_kit::Styled::visible)
                                 .children(montage(false)),
                         )
                     }
@@ -2546,10 +2545,10 @@ impl Muralist {
             // Shape: aspect ratio and minimum resolution.
             let mut ratios: Vec<(String, Option<String>)> =
                 RATIO_PRESETS.iter().map(|(l, v)| (l.to_string(), v.map(str::to_owned))).collect();
-            if let Some(acc) = self.account.as_ref().and_then(|a| a.ratios()) {
-                if !ratios.iter().any(|(_, v)| v.as_deref() == Some(&acc)) {
-                    ratios.push(("Account".into(), Some(acc)));
-                }
+            if let Some(acc) = self.account.as_ref().and_then(super::wallhaven::UserSettings::ratios)
+                && !ratios.iter().any(|(_, v)| v.as_deref() == Some(&acc))
+            {
+                ratios.push(("Account".into(), Some(acc)));
             }
             let ratio_label = ratios.iter().find(|(_, v)| *v == self.ratios).map(|(l, _)| l.clone());
             let ratio_cols = ratios.len() as u16;
@@ -2570,7 +2569,7 @@ impl Muralist {
                 opt(("res", i), label, on, None, p)
                     .on_click(cx.listener(move |this, _, _, cx| this.set_min_resolution(value, cx)))
             });
-            let res_account = self.account.as_ref().and_then(|a| a.resolutions()).map(|res| {
+            let res_account = self.account.as_ref().and_then(super::wallhaven::UserSettings::resolutions).map(|res| {
                 let on = self.resolutions.as_deref() == Some(&res);
                 opt("res-account", "Account resolutions", on, None, p).on_click(cx.listener(move |this, _, _, cx| {
                     this.resolutions = Some(res.clone());
@@ -2805,7 +2804,7 @@ impl Muralist {
                 let open_dir = {
                     let dir = dir.clone();
                     move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
-                        cx.open_url(&format!("file://{}", dir.display()))
+                        cx.open_url(&format!("file://{}", dir.display()));
                     }
                 };
                 let field = bar_field("library-field", &tints, p)
@@ -2843,7 +2842,7 @@ impl Muralist {
                                         Animation::new(std::time::Duration::from_millis(1100))
                                             .repeat()
                                             .with_easing(pulsating_between(0.35, 1.)),
-                                        |d, t| d.opacity(t),
+                                        gpui_kit::Styled::opacity,
                                     ),
                                 )
                                 .child(format!("{done}/{total}")),
@@ -3003,8 +3002,7 @@ impl Muralist {
                 .colors
                 .first()
                 .and_then(|c| parse_hex(c))
-                .map(|c| Hsla { l: (c.l * 0.45).min(0.3), ..c })
-                .unwrap_or(p.surface2),
+                .map_or(p.surface2, |c| Hsla { l: (c.l * 0.45).min(0.3), ..c }),
             Item::Local(_) => p.surface2,
         };
         // Mosaic cards that aren't thumbnail-shaped use Wallhaven's
@@ -3019,19 +3017,18 @@ impl Muralist {
         let hovered = holo.is_some();
         // Palette for the hover effects; local images get theirs on first hover.
         let colors = if hovered {
-            if let Item::Local(path) = &item {
-                if !self.local_palettes.contains_key(path) {
-                    if let Some(thumb) = self.local_thumb(path) {
-                        self.local_palettes.insert(path.clone(), adaptive::image_palette(&thumb));
-                    }
-                }
+            if let Item::Local(path) = &item
+                && !self.local_palettes.contains_key(path)
+                && let Some(thumb) = self.local_thumb(path)
+            {
+                self.local_palettes.insert(path.clone(), adaptive::image_palette(&thumb));
             }
             gridmodes::item_colors(&item, &self.local_palettes)
         } else {
             Vec::new()
         };
         // Labels drift against the pointer for a hint of depth.
-        let (dx, dy) = holo.map(|(rx, ry)| ((0.5 - rx) * 8., (0.5 - ry) * 4.)).unwrap_or((0., 0.));
+        let (dx, dy) = holo.map_or((0., 0.), |(rx, ry)| ((0.5 - rx) * 8., (0.5 - ry) * 4.));
         let fresh =
             self.thumb_arrived.get(&card_key).is_some_and(|t| t.elapsed() < std::time::Duration::from_millis(600));
         let (thumb, left, right) = match &item {
@@ -3573,7 +3570,7 @@ impl Muralist {
             let Some(layout) = self.justified.get(row).cloned() else {
                 return self.render_footer(row_h, cx);
             };
-            let start = layout.first().map(|(ix, _)| *ix).unwrap_or(0);
+            let start = layout.first().map_or(0, |(ix, _)| *ix);
             let h = self.justified_h;
             let cards = layout
                 .into_iter()
@@ -3832,7 +3829,7 @@ impl Muralist {
                     .rounded_lg()
                     .bg(hsla(0., 0., 0., 0.6))
                     .invisible()
-                    .group_hover("preview", |s| s.visible())
+                    .group_hover("preview", gpui_kit::Styled::visible)
                     .children(remote.clone().map(|w| {
                         let like = format!("like:{}", w.id);
                         kit::Btn::new("pv-like")
@@ -3842,7 +3839,7 @@ impl Muralist {
                             .tooltip("More like this")
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 cx.stop_propagation();
-                                this.search_for(like.clone(), window, cx)
+                                this.search_for(like.clone(), window, cx);
                             }))
                             .render()
                     }))
@@ -3854,12 +3851,12 @@ impl Muralist {
                             .tooltip("Full size")
                             .on_click(cx.listener(|this, _, window, cx| {
                                 cx.stop_propagation();
-                                this.open_lightbox(window, cx)
+                                this.open_lightbox(window, cx);
                             }))
                             .render(),
                     )
                     .children(remote.clone().map(|w| {
-                        let url = w.url.clone();
+                        let url = w.url;
                         kit::Btn::new("pv-open")
                             .icon("external-link")
                             .ghost()
@@ -3867,7 +3864,7 @@ impl Muralist {
                             .tooltip("Open on wallhaven.cc")
                             .on_click(move |_, _, cx| {
                                 cx.stop_propagation();
-                                cx.open_url(&url)
+                                cx.open_url(&url);
                             })
                             .render()
                     }))
@@ -3879,7 +3876,7 @@ impl Muralist {
                             .tooltip("Save to library")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 cx.stop_propagation();
-                                this.download_selected(cx)
+                                this.download_selected(cx);
                             }))
                             .render()
                     })),
@@ -3999,7 +3996,7 @@ impl Muralist {
             FullState::Ready(p) => Some(p.clone()),
             _ => None,
         }));
-        Some((mb as u64 * 1_048_576, keep))
+        Some((u64::from(mb) * 1_048_576, keep))
     }
 
     /// Sweeps now, then refreshes the size Settings shows.
@@ -4365,10 +4362,10 @@ impl Muralist {
         self.precog.speculative.retain(|id| matches!(full.get(id), Some(FullState::Loading { .. })));
         while self.precog.speculative.len() >= PRECOG_MAX_INFLIGHT {
             let Some(old) = self.precog.speculative.pop_front() else { break };
-            if Some(&old) != selected_id.as_ref() {
-                if let Some(FullState::Loading { progress }) = self.full.remove(&old) {
-                    progress.cancel.store(true, Ordering::Relaxed);
-                }
+            if Some(&old) != selected_id.as_ref()
+                && let Some(FullState::Loading { progress }) = self.full.remove(&old)
+            {
+                progress.cancel.store(true, Ordering::Relaxed);
             }
         }
         self.precog.speculative.push_back(w.id.clone());

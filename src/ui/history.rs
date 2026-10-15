@@ -200,7 +200,7 @@ impl Muralist {
                     .left(px(RAIL_W / 2. - 1.))
                     .w(px(2.))
                     .top(px(if first { 30. } else { 0. }))
-                    .bottom(px(if last { 0. } else { 0. }))
+                    .bottom_0()
                     .when(last, |d| d.h(px(30.)))
                     .bg(with_alpha(p.border_strong, 0.8)),
             )
@@ -214,7 +214,7 @@ impl Muralist {
                     .bg(c)
                     .border_2()
                     .border_color(p.bg)
-                    .when(up_now, |d| d.shadow_lg()),
+                    .when(up_now, gpui_kit::Styled::shadow_lg),
             )
             .when(up_now, |d| {
                 d.child(
@@ -231,7 +231,7 @@ impl Muralist {
                             Animation::new(std::time::Duration::from_millis(1800))
                                 .repeat()
                                 .with_easing(pulsating_between(0.2, 1.)),
-                            |d, t| d.opacity(t),
+                            gpui_kit::Styled::opacity,
                         ),
                 )
             });
@@ -295,7 +295,7 @@ impl Muralist {
                     .flex_none()
                     .items_end()
                     .gap_1p5()
-                    .when(!hovered, |d| d.invisible())
+                    .when(!hovered, gpui_kit::Styled::invisible)
                     .child(
                         h_flex()
                             .gap_1p5()

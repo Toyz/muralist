@@ -63,7 +63,7 @@ pub fn remember_with_tags(w: &Wallpaper, tags: Vec<Tag>) -> Result<()> {
 
 /// Adds tags to a wallpaper already on record, if they're new.
 pub fn set_tags(id: &str, tags: &[Tag]) -> Result<()> {
-    let _guard = WRITE.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = WRITE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut p = Provenance::load();
     match p.records.get_mut(id) {
         Some(r) if r.tags.as_deref() != Some(tags) => r.tags = Some(tags.to_vec()),
@@ -73,7 +73,7 @@ pub fn set_tags(id: &str, tags: &[Tag]) -> Result<()> {
 }
 
 fn record(w: &Wallpaper, tags: Option<Vec<Tag>>) -> Result<()> {
-    let _guard = WRITE.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = WRITE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut p = Provenance::load();
     let r = p.records.entry(w.id.clone()).or_insert_with(|| Record {
         wallpaper: w.clone(),
@@ -103,7 +103,7 @@ fn write(p: &Provenance) -> Result<()> {
 pub fn wallhaven_id(file: &Path) -> Option<String> {
     let stem = file.file_stem()?.to_str()?;
     let rest = stem.strip_prefix("wallhaven-").or_else(|| stem.strip_prefix("full-"))?;
-    let id: String = rest.chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
+    let id: String = rest.chars().take_while(char::is_ascii_alphanumeric).collect();
     (id.len() >= 4).then_some(id)
 }
 

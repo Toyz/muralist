@@ -146,7 +146,7 @@ pub struct WallpaperInfo {
     pub created_at: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Tag {
     pub id: u64,
     pub name: String,
@@ -210,7 +210,7 @@ pub struct Wallpaper {
 impl Wallpaper {
     /// File name used for the downloaded original, matching Wallhaven's own naming.
     pub fn file_name(&self) -> String {
-        self.path.rsplit('/').next().map(str::to_owned).unwrap_or_else(|| format!("wallhaven-{}.jpg", self.id))
+        self.path.rsplit('/').next().map_or_else(|| format!("wallhaven-{}.jpg", self.id), str::to_owned)
     }
 }
 

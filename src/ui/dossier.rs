@@ -21,7 +21,7 @@ const THUMB: (f32, f32) = (34., 24.);
 
 /// A steady pseudo-random height for a tag's bar.
 fn bar_h(name: &str) -> f32 {
-    let h = name.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100_0000_01b3));
+    let h = name.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3));
     10. + (h % 25) as f32
 }
 

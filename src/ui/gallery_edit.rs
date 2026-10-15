@@ -128,7 +128,7 @@ impl Muralist {
                                 if !s.purity.iter().any(|b| *b) {
                                     s.purity[i] = true;
                                 }
-                            })
+                            });
                         }),
                     )
                 });
@@ -141,7 +141,7 @@ impl Muralist {
                                 if !s.categories.iter().any(|b| *b) {
                                     s.categories[i] = true;
                                 }
-                            })
+                            });
                         },
                     ))
                 });
@@ -170,7 +170,7 @@ impl Muralist {
                             this.edit_search(cx, |q, _| {
                                 q.atleast = value.map(str::to_owned);
                                 q.resolutions = None;
-                            })
+                            });
                         }))
                 });
                 let limit_segs = LIMITS.iter().enumerate().map(|(i, &n)| {

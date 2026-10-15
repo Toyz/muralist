@@ -38,7 +38,7 @@ fn raw_base() -> Pal {
 }
 
 pub(super) fn current() -> Pal {
-    CURRENT.with(|c| c.get())
+    CURRENT.with(std::cell::Cell::get)
 }
 
 pub(super) fn set_current(p: Pal) {
@@ -194,7 +194,7 @@ pub(super) fn image_palette(path: &Path) -> Vec<Hsla> {
         return Vec::new();
     };
     let small = img.thumbnail(40, 40).to_rgb8();
-    let pts: Vec<[f32; 3]> = small.pixels().map(|p| p.0.map(|v| v as f32 / 255.)).collect();
+    let pts: Vec<[f32; 3]> = small.pixels().map(|p| p.0.map(|v| f32::from(v) / 255.)).collect();
     kmeans(&pts, 5).into_iter().map(|[r, g, b]| Rgba { r, g, b, a: 1. }.into()).collect()
 }
 
@@ -257,7 +257,7 @@ pub(super) fn weighted_palette(path: &Path) -> Vec<([f32; 3], f32)> {
         return Vec::new();
     };
     let small = img.thumbnail(48, 48).to_rgb8();
-    let pts: Vec<[f32; 3]> = small.pixels().map(|p| p.0.map(|v| v as f32 / 255.)).collect();
+    let pts: Vec<[f32; 3]> = small.pixels().map(|p| p.0.map(|v| f32::from(v) / 255.)).collect();
     kmeans_weighted(&pts, 6)
 }
 

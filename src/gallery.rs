@@ -43,7 +43,7 @@ impl Entry {
 }
 
 /// A search, frozen so it can be run again later.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SavedSearch {
     pub query: String,
     pub categories: [bool; 3],
@@ -145,7 +145,7 @@ impl SavedSearch {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum Source {
     /// Hand-picked.

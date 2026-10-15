@@ -47,7 +47,7 @@ fn readout(
             .child(div().text_size(px(20.)).line_height(px(22.)).font_weight(FontWeight::BOLD).with_animation(
                 id,
                 Animation::new(Duration::from_millis(900)).with_easing(ease_out_quint()),
-                move |d, t| d.child(fmt(v * t as f64)),
+                move |d, t| d.child(fmt(v * f64::from(t))),
             ))
             .into_any_element(),
         None => card
@@ -55,7 +55,7 @@ fn readout(
                 div().child("--").with_animation(
                     id,
                     Animation::new(Duration::from_millis(900)).repeat().with_easing(pulsating_between(0.3, 1.)),
-                    |d, t| d.opacity(t),
+                    gpui_kit::Styled::opacity,
                 ),
             ))
             .into_any_element(),
@@ -164,7 +164,7 @@ impl Muralist {
                                 Animation::new(Duration::from_millis(1200))
                                     .repeat()
                                     .with_easing(pulsating_between(0.5, 1.)),
-                                |d, t| d.opacity(t),
+                                gpui_kit::Styled::opacity,
                             ),
                     )
                 })

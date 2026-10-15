@@ -845,7 +845,7 @@ impl Muralist {
                             let used = mb_or_gb(self.cache_size);
                             match self.cfg.cache_limit_mb {
                                 0 => format!("{used} of thumbnails and originals, no limit"),
-                                mb => format!("{used} of {}  ·  least recently used goes first", mb_or_gb(mb as u64 * 1_048_576)),
+                                mb => format!("{used} of {}  ·  least recently used goes first", mb_or_gb(u64::from(mb) * 1_048_576)),
                             }
                         },
                         kit::Btn::new("settings-clear-cache")

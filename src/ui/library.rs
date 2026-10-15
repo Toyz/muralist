@@ -623,14 +623,17 @@ fn tag_chip(id: u64, name: String, purity: &str, n: usize, on: bool, masked: boo
     let tint = (purity != "sfw").then(|| purity_color(purity));
     let group = SharedString::from(format!("tag-{id}"));
     let label = if masked {
-        div().relative().child(div().invisible().group_hover(group.clone(), |s| s.visible()).child(name)).child(
-            div()
-                .absolute()
-                .inset_0()
-                .rounded_sm()
-                .bg(with_alpha(tint.unwrap_or(p.border_strong), 0.35))
-                .group_hover(group.clone(), |s| s.invisible()),
-        )
+        div()
+            .relative()
+            .child(div().invisible().group_hover(group.clone(), gpui_kit::Styled::visible).child(name))
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .rounded_sm()
+                    .bg(with_alpha(tint.unwrap_or(p.border_strong), 0.35))
+                    .group_hover(group.clone(), gpui_kit::Styled::invisible),
+            )
     } else {
         div().child(name)
     };

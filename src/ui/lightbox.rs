@@ -81,7 +81,7 @@ impl Muralist {
     fn enter_zoom(&mut self, focus: Option<(f32, f32)>, cx: &mut Context<Self>) {
         self.lb_zoom = !self.lb_zoom;
         if self.lb_zoom {
-            let (iw, ih) = self.selected_dims.map(|(w, h)| (w as f32, h as f32)).unwrap_or((1., 1.));
+            let (iw, ih) = self.selected_dims.map_or((1., 1.), |(w, h)| (w as f32, h as f32));
             let (u, v) = focus.unwrap_or((0.5, 0.5));
             self.lb_z = 1. / self.scale;
             self.lb_pan = self.clamp_pan((u * iw, v * ih), self.lb_z);
@@ -148,7 +148,7 @@ impl Muralist {
         };
         let (cw, ch) = self.content;
         let dims = self.selected_dims;
-        let aspect = dims.map(|(w, h)| w as f32 / h.max(1) as f32).unwrap_or(16. / 9.);
+        let aspect = dims.map_or(16. / 9., |(w, h)| w as f32 / h.max(1) as f32);
         let zoom = self.lb_zoom && dims.is_some();
         let panel = self.lb_panel && !zoom && cw > 1100.;
 
@@ -199,19 +199,19 @@ impl Muralist {
         // ---- the image (or the desks mockup) ----
         let stage: AnyElement = if zoom {
             let screen_fit = full.as_deref().and_then(|f| self.fitted(f, bucket(cw), bucket(ch)));
-            self.render_lb_zoom(dims.unwrap(), full.clone(), base.clone(), screen_fit, glow_c, cx)
+            self.render_lb_zoom(dims.unwrap(), full.clone(), base, screen_fit, glow_c, cx)
         } else if self.lb_desks && !self.monitors.is_empty() {
-            self.render_lb_desks(best.clone(), dims, glow_c, stage_x, stage_y, stage_w, stage_h, &key)
+            self.render_lb_desks(best, dims, glow_c, stage_x, stage_y, stage_w, stage_h, &key)
         } else {
             let (x, y, w, h) = fit_rect(aspect, stage_x, stage_y, stage_w, stage_h);
-            let dir = self.lb_dir as f32;
+            let dir = f32::from(self.lb_dir);
             let lb_bands = match (bands, &base) {
                 (Some(b), Some(t)) => Some((b, t.clone())),
                 _ => None,
             };
             let band_key = format!("lb-{key}");
             let rect = self.lb_rect.clone();
-            let loupe = self.render_loupe(dims, full.clone().or(best.clone()), x, y, w, h);
+            let loupe = self.render_loupe(dims, full.clone().or(best), x, y, w, h);
 
             let image = div()
                 .absolute()
@@ -221,7 +221,7 @@ impl Muralist {
                 .h(px(h))
                 .rounded(px(IMG_R))
                 .shadow(glass::ambilight(glow_c, 60., 0.28))
-                .when_some(under.clone(), |d, t| {
+                .when_some(under, |d, t| {
                     d.child(radius(
                         img(t)
                             .absolute()
@@ -235,7 +235,7 @@ impl Muralist {
                     ))
                 })
                 .when_some(lb_bands, |d, (b, t)| d.children(develop_bands(&band_key, &t, b, IMG_R, (w, h))))
-                .when_some(fit.clone(), |d, f| {
+                .when_some(fit, |d, f| {
                     d.child(fade_in(
                         SharedString::from(format!("lb-fade-{key}")),
                         radius(img(f).size_full().object_fit(ObjectFit::Fill), IMG_R),
@@ -576,8 +576,8 @@ impl Muralist {
         let bezel = 10.;
         let (iw, ih) = dims.unwrap_or((16, 9));
         let span = self.monitors.len() > 1 && iw as f32 / ih.max(1) as f32 >= 2.4;
-        let (s, off_x, off_y) = span::layout(iw, ih, bw as f64, bh as f64, Framing::default());
-        let (img_w, img_h) = ((iw as f64 * s) as f32 * k, (ih as f64 * s) as f32 * k);
+        let (s, off_x, off_y) = span::layout(iw, ih, f64::from(bw), f64::from(bh), Framing::default());
+        let (img_w, img_h) = ((f64::from(iw) * s) as f32 * k, (f64::from(ih) * s) as f32 * k);
 
         let screens: Vec<AnyElement> = self
             .monitors
@@ -691,7 +691,7 @@ impl Muralist {
         let left = cw / 2. - px_ * z;
         let top = ch / 2. - py_ * z;
         // Past ~50% the original is sharper than the screen-sized copy.
-        let src = if z * self.scale >= 0.5 { full.clone().or(fit.clone()) } else { fit.clone().or(full.clone()) };
+        let src = if z * self.scale >= 0.5 { full.or(fit.clone()) } else { fit.clone().or(full) };
         let percent = (z * self.scale * 100.).round() as u32;
         let dragging = self.lb_drag.is_some_and(|(_, moved)| moved);
 
@@ -718,7 +718,7 @@ impl Muralist {
             .shadow_lg()
             .bg(hsla(0., 0., 0., 0.6))
             .cursor_pointer()
-            .when_some(fit.clone().or(base.clone()), |d, t| {
+            .when_some(fit.or(base.clone()), |d, t| {
                 d.child(img(t).size_full().object_fit(ObjectFit::Fill).opacity(0.75))
             })
             .child(
@@ -843,7 +843,7 @@ impl Muralist {
 
     /// Keep the image covering the view, or centered when it's smaller.
     fn clamp_pan(&self, (x, y): (f32, f32), z: f32) -> (f32, f32) {
-        let (iw, ih) = self.selected_dims.map(|(w, h)| (w as f32, h as f32)).unwrap_or((1., 1.));
+        let (iw, ih) = self.selected_dims.map_or((1., 1.), |(w, h)| (w as f32, h as f32));
         let (cw, ch) = self.content;
         let axis = |v: f32, size: f32, view: f32| {
             let half = view / 2. / z;
@@ -858,7 +858,7 @@ impl Muralist {
         let z = z.clamp(min, 3. / self.scale);
         let (cw, ch) = self.content;
         let (inset_x, inset_y) = ((self.viewport.0 - cw) / 2., (self.viewport.1 - ch) / 2.);
-        let (ax, ay) = at.map(|p| (f32::from(p.x) - inset_x, f32::from(p.y) - inset_y)).unwrap_or((cw / 2., ch / 2.));
+        let (ax, ay) = at.map_or((cw / 2., ch / 2.), |p| (f32::from(p.x) - inset_x, f32::from(p.y) - inset_y));
         let old = self.lb_z;
         // Image point under the anchor before, kept under it after.
         let ix = self.lb_pan.0 + (ax - cw / 2.) / old;
@@ -877,7 +877,7 @@ impl Muralist {
         let mm_top = ch - 20. - mm_h;
         let u = ((f32::from(pos.x) - inset_x - mm_left) / mm_w).clamp(0., 1.);
         let v = ((f32::from(pos.y) - inset_y - mm_top) / mm_h).clamp(0., 1.);
-        let (iw, ih) = self.selected_dims.map(|(w, h)| (w as f32, h as f32)).unwrap_or((1., 1.));
+        let (iw, ih) = self.selected_dims.map_or((1., 1.), |(w, h)| (w as f32, h as f32));
         self.lb_pan = self.clamp_pan((u * iw, v * ih), self.lb_z);
         cx.notify();
     }

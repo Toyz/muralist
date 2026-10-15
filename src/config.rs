@@ -27,7 +27,7 @@ impl Spoiler {
 }
 
 /// A past search, with a few of its results for the preview strip.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecentQuery {
     pub text: String,
     /// (wallpaper id, small thumbnail url)
@@ -130,7 +130,7 @@ pub struct Config {
 
 /// Search filters that differ from the account defaults. Unset fields follow
 /// the account; an empty string means "no filter" for the string fields.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FilterOverrides {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -249,7 +249,7 @@ pub struct State {
     pub history: Vec<HistoryEntry>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HistoryEntry {
     /// Unix seconds.
     pub at: i64,

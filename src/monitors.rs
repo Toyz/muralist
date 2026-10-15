@@ -1,6 +1,6 @@
 //! A display, as every backend reports it.
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Monitor {
     /// Connector name, e.g. "DP-1".
     pub name: String,

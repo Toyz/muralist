@@ -59,12 +59,11 @@ pub(super) fn holo_layers(rx: f32, ry: f32, colors: &[Hsla]) -> [AnyElement; 2] 
     let (vx, vy) = (0.5 - rx, 0.5 - ry);
     let angle = vx.atan2(-vy).to_degrees();
 
-    let light = colors
-        .iter()
-        .copied()
-        .max_by(|a, b| a.l.total_cmp(&b.l))
-        .map(|c| Hsla { l: c.l.max(0.85), s: c.s.min(0.6), ..c })
-        .unwrap_or(hsla(0., 0., 1., 1.));
+    let light = colors.iter().copied().max_by(|a, b| a.l.total_cmp(&b.l)).map_or(hsla(0., 0., 1., 1.), |c| Hsla {
+        l: c.l.max(0.85),
+        s: c.s.min(0.6),
+        ..c
+    });
     let glare = radius(
         div().absolute().top_0().left_0().size_full().bg(linear_gradient(
             angle,

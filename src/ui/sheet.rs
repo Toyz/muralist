@@ -46,7 +46,7 @@ pub(super) fn palette_match(a: &[Hsla], b: &[Hsla]) -> f32 {
     let dist = |x: &Hsla, y: &Hsla| {
         let dh = (x.h - y.h).abs();
         let dh = dh.min(1. - dh) * 2.;
-        let sat = (x.s + y.s) / 2.;
+        let sat = f32::midpoint(x.s, y.s);
         ((dh * sat).powi(2) + (x.s - y.s).powi(2) * 0.5 + (x.l - y.l).powi(2)).sqrt()
     };
     let avg = a.iter().map(|x| b.iter().map(|y| dist(x, y)).fold(f32::MAX, f32::min)).sum::<f32>() / a.len() as f32;
@@ -72,7 +72,7 @@ impl Muralist {
             cx.notify();
             return;
         }
-        let ix = if tab == InspectorTab::Similar { 1 } else { 0 };
+        let ix = usize::from(tab == InspectorTab::Similar);
         let origin = self.dossier_bounds.borrow().get(ix).copied();
         self.sheet_seq += 1;
         self.sheet_anim = Some(SheetAnim { origin, seq: self.sheet_seq, closing: false });
@@ -92,7 +92,7 @@ impl Muralist {
             return;
         }
         // Fold back into the tile it came from, then go.
-        let ix = if self.inspector_tab == InspectorTab::Similar { 1 } else { 0 };
+        let ix = usize::from(self.inspector_tab == InspectorTab::Similar);
         anim.origin = self.dossier_bounds.borrow().get(ix).copied().or(anim.origin);
         anim.closing = true;
         self.sheet_seq += 1;
@@ -194,7 +194,7 @@ impl Muralist {
                 .unwrap_or((pw, ph));
             let cover = (pw / 2. / iw).max(ph / ih) * self.scale;
             let fit = full.and_then(|f| self.fitted(&f, (iw * cover).ceil() as u32, (ih * cover).ceil() as u32));
-            (m, w.id.clone(), thumb, fit, pulling)
+            (m, w.id, thumb, fit, pulling)
         });
         // The picture itself, downscaled for exactly its box once the
         // original is here, over its thumbnail until then.
@@ -258,7 +258,7 @@ impl Muralist {
                     ),
             )
             // Side by side with a hovered lookalike, split down the middle.
-            .when_some(compare.clone(), |d, (m, cid, thumb, fit, pulling)| {
+            .when_some(compare, |d, (m, cid, thumb, fit, pulling)| {
                 let n = self.sheet_compare.unwrap_or(0);
                 let half = |t: std::path::PathBuf, gray: bool| {
                     div()
@@ -301,7 +301,7 @@ impl Muralist {
                                             Animation::new(Duration::from_millis(700))
                                                 .repeat()
                                                 .with_easing(pulsating_between(0.2, 1.)),
-                                            |d, t| d.opacity(t),
+                                            gpui_kit::Styled::opacity,
                                         ),
                                     )
                                     .child(format!("PULLING {}%", (f * 100.) as u32)),
@@ -435,7 +435,7 @@ impl Muralist {
                 div().flex_1().h_full().rounded_full().bg(*col).with_animation(
                     SharedString::from(format!("sheet-pal-{key}-{seq}-{i}")),
                     Animation::new(Duration::from_millis(260 + i as u64 * 60)).with_easing(ease_out_quint()),
-                    move |d, t| d.opacity(t),
+                    gpui_kit::Styled::opacity,
                 )
             })));
 
@@ -683,7 +683,7 @@ impl Muralist {
                 kit::Btn::new("similar-all").label("See all").icon("arrow-right").ghost().sm().on_click(cx.listener(
                     move |this, _, window, cx| {
                         this.close_sheet(cx);
-                        this.search_for(q.clone(), window, cx)
+                        this.search_for(q.clone(), window, cx);
                     },
                 ))
             }));
@@ -829,7 +829,7 @@ impl Muralist {
                         }))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.sheet_compare = None;
-                            this.select(item.clone(), window, cx)
+                            this.select(item.clone(), window, cx);
                         }));
                     glass::stagger(SharedString::from(format!("lineup-{}-{i}", sw.id)), i, row).into_any_element()
                 })

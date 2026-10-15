@@ -144,7 +144,7 @@ impl Btn {
             .gap_2()
             .h(px(h))
             .map(|d| if icon_only { d.w(px(h)) } else { d.px(px(if self.size == Size::Sm { 10. } else { 16. })) })
-            .when(self.full, |d| d.w_full())
+            .when(self.full, gpui_kit::Styled::w_full)
             .map(|d| if self.round { d.rounded_full() } else { d.rounded_lg() })
             .overflow_hidden()
             .text_color(text)
@@ -154,7 +154,7 @@ impl Btn {
                 Size::Lg => d.text_sm().font_weight(FontWeight::SEMIBOLD),
             })
             .when(self.size != Size::Lg, |d| d.font_weight(FontWeight::MEDIUM))
-            .when_some(fill, |d, f| d.bg(f))
+            .when_some(fill, gpui_kit::Styled::bg)
             .when_some(edge, |d, e| d.border_1().border_color(e))
             // Lit bevel: a hairline of light along the top edge.
             .when(self.tone != Tone::Ghost || self.selected, |d| {
@@ -167,7 +167,7 @@ impl Btn {
             })
             .when_some(self.loading.then_some(()), |d, _| d.child(Spinner::new().xsmall().color(text)))
             .when_some(self.icon.filter(|_| !self.loading), |d, name| d.child(icon(&name).size(icon_size)))
-            .when_some(self.label, |d, l| d.child(l))
+            .when_some(self.label, gpui_kit::ParentElement::child)
             .when_some(self.tooltip, |d, t| d.tooltip(move |window, cx| Tooltip::new(t.clone()).build(window, cx)));
 
         if interactive {

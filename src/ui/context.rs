@@ -350,7 +350,7 @@ impl Muralist {
                                     }
                                 }))
                                 .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.run_context(Action::SetOn(name.clone()), window, cx)
+                                    this.run_context(Action::SetOn(name.clone()), window, cx);
                                 })),
                         )
                         // The stand: a neck and a foot.

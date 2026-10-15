@@ -41,7 +41,7 @@ impl Muralist {
         let min_y = self.monitors.iter().map(|m| m.y).min().unwrap_or(0);
         let max_x = self.monitors.iter().map(|m| m.x + m.width as i32).max().unwrap_or(1);
         let max_y = self.monitors.iter().map(|m| m.y + m.height as i32).max().unwrap_or(1);
-        (min_x, min_y, (max_x - min_x) as f64, (max_y - min_y) as f64)
+        (min_x, min_y, f64::from(max_x - min_x), f64::from(max_y - min_y))
     }
 
     /// Desktop units to on-screen pixels in the editor.
@@ -53,16 +53,16 @@ impl Muralist {
     }
 
     fn span_drag(&mut self, pos: Point<Pixels>, cx: &mut Context<Self>) {
-        let k = self.editor_scale() as f64;
+        let k = f64::from(self.editor_scale());
         let (_, _, bw, bh) = self.desktop_box();
         let Some(edit) = &mut self.span_edit else { return };
         let Some(last) = edit.drag else { return };
         let (s, off_x, off_y) = span::layout(edit.dims.0, edit.dims.1, bw, bh, edit.framing);
-        let slack_x = (edit.dims.0 as f64 * s - bw).max(0.);
-        let slack_y = (edit.dims.1 as f64 * s - bh).max(0.);
+        let slack_x = (f64::from(edit.dims.0) * s - bw).max(0.);
+        let slack_y = (f64::from(edit.dims.1) * s - bh).max(0.);
         // Dragging right reveals more of the left: overhang shrinks.
-        let new_x = (off_x - f32::from(pos.x - last.x) as f64 / k).clamp(0., slack_x);
-        let new_y = (off_y - f32::from(pos.y - last.y) as f64 / k).clamp(0., slack_y);
+        let new_x = (off_x - f64::from(f32::from(pos.x - last.x)) / k).clamp(0., slack_x);
+        let new_y = (off_y - f64::from(f32::from(pos.y - last.y)) / k).clamp(0., slack_y);
         let to_pan = |off: f64, slack: f64| if slack > 0. { (off / (slack / 2.) - 1.) as f32 } else { 0. };
         edit.framing.pan = (to_pan(new_x, slack_x), to_pan(new_y, slack_y));
         edit.drag = Some(pos);
@@ -142,8 +142,8 @@ impl Muralist {
         let (min_x, min_y, bw, bh) = self.desktop_box();
         let k = self.editor_scale();
         let (s, off_x, off_y) = span::layout(dims.0, dims.1, bw, bh, framing);
-        let img_w = (dims.0 as f64 * s) as f32 * k;
-        let img_h = (dims.1 as f64 * s) as f32 * k;
+        let img_w = (f64::from(dims.0) * s) as f32 * k;
+        let img_h = (f64::from(dims.1) * s) as f32 * k;
         let img_left = MARGIN - off_x as f32 * k;
         let img_top = MARGIN - off_y as f32 * k;
         let stage_w = bw as f32 * k + MARGIN * 2.;
@@ -182,7 +182,7 @@ impl Muralist {
                             .bg(hsla(0., 0., 0., 0.6))
                             .text_xs()
                             .text_color(white())
-                            .child(m.name.clone()),
+                            .child(m.name),
                     )
                     .into_any_element()
             })
@@ -202,7 +202,7 @@ impl Muralist {
                 CursorStyle::OpenHand
             })
             // The whole image, dimmed: everything outside the screens gets cut.
-            .when_some(image.clone(), |d, path| d.child(picture(path, img_left, img_top).opacity(0.22)))
+            .when_some(image, |d, path| d.child(picture(path, img_left, img_top).opacity(0.22)))
             .children(windows)
             .on_mouse_down(
                 MouseButton::Left,

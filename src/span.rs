@@ -12,7 +12,7 @@ use image::imageops::FilterType;
 use crate::monitors::Monitor;
 
 /// Pixel rectangle inside the source image.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Crop {
     pub x: u32,
     pub y: u32,
@@ -38,12 +38,12 @@ impl Default for Framing {
 /// image pixel) and how far the image's top-left sits up and left of the
 /// monitors' bounding box.
 pub fn layout(img_w: u32, img_h: u32, bbox_w: f64, bbox_h: f64, framing: Framing) -> (f64, f64, f64) {
-    let (iw, ih) = (img_w as f64, img_h as f64);
-    let s = (bbox_w / iw).max(bbox_h / ih) * framing.zoom.max(1.) as f64;
+    let (iw, ih) = (f64::from(img_w), f64::from(img_h));
+    let s = (bbox_w / iw).max(bbox_h / ih) * f64::from(framing.zoom.max(1.));
     let slack_x = (iw * s - bbox_w).max(0.);
     let slack_y = (ih * s - bbox_h).max(0.);
-    let off_x = slack_x / 2. * (1. + framing.pan.0.clamp(-1., 1.) as f64);
-    let off_y = slack_y / 2. * (1. + framing.pan.1.clamp(-1., 1.) as f64);
+    let off_x = slack_x / 2. * (1. + f64::from(framing.pan.0.clamp(-1., 1.)));
+    let off_y = slack_y / 2. * (1. + f64::from(framing.pan.1.clamp(-1., 1.)));
     (s, off_x, off_y)
 }
 
@@ -56,12 +56,12 @@ pub fn crops(img_w: u32, img_h: u32, monitors: &[Monitor]) -> Vec<Crop> {
 
 /// [`crops`] with an explicit zoom and pan.
 pub fn crops_framed(img_w: u32, img_h: u32, monitors: &[Monitor], framing: Framing) -> Vec<Crop> {
-    let min_x = monitors.iter().map(|m| m.x).min().unwrap_or(0) as f64;
-    let min_y = monitors.iter().map(|m| m.y).min().unwrap_or(0) as f64;
-    let max_x = monitors.iter().map(|m| m.x + m.width as i32).max().unwrap_or(0) as f64;
-    let max_y = monitors.iter().map(|m| m.y + m.height as i32).max().unwrap_or(0) as f64;
+    let min_x = f64::from(monitors.iter().map(|m| m.x).min().unwrap_or(0));
+    let min_y = f64::from(monitors.iter().map(|m| m.y).min().unwrap_or(0));
+    let max_x = f64::from(monitors.iter().map(|m| m.x + m.width as i32).max().unwrap_or(0));
+    let max_y = f64::from(monitors.iter().map(|m| m.y + m.height as i32).max().unwrap_or(0));
     let (bw, bh) = (max_x - min_x, max_y - min_y);
-    let (iw, ih) = (img_w as f64, img_h as f64);
+    let (iw, ih) = (f64::from(img_w), f64::from(img_h));
 
     // Logical units per image pixel, and the image overhang up/left.
     let (s, off_x, off_y) = layout(img_w, img_h, bw, bh, framing);
@@ -69,10 +69,10 @@ pub fn crops_framed(img_w: u32, img_h: u32, monitors: &[Monitor], framing: Frami
     monitors
         .iter()
         .map(|m| {
-            let x0 = ((m.x as f64 - min_x + off_x) / s).round().clamp(0.0, iw - 1.0);
-            let y0 = ((m.y as f64 - min_y + off_y) / s).round().clamp(0.0, ih - 1.0);
-            let w = (m.width as f64 / s).round().clamp(1.0, iw - x0);
-            let h = (m.height as f64 / s).round().clamp(1.0, ih - y0);
+            let x0 = ((f64::from(m.x) - min_x + off_x) / s).round().clamp(0.0, iw - 1.0);
+            let y0 = ((f64::from(m.y) - min_y + off_y) / s).round().clamp(0.0, ih - 1.0);
+            let w = (f64::from(m.width) / s).round().clamp(1.0, iw - x0);
+            let h = (f64::from(m.height) / s).round().clamp(1.0, ih - y0);
             Crop { x: x0 as u32, y: y0 as u32, w: w as u32, h: h as u32 }
         })
         .collect()
@@ -95,7 +95,7 @@ pub fn slice_framed(
     }
     let img = image::open(src).with_context(|| format!("opening {}", src.display()))?;
     fs::create_dir_all(out_dir)?;
-    let stem = src.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "span".into());
+    let stem = src.file_stem().map_or_else(|| "span".into(), |s| s.to_string_lossy().into_owned());
 
     let mut result = BTreeMap::new();
     // Distinct names per framing: desktops (Plasma, for one) won't reload an image whose path

@@ -362,7 +362,7 @@ impl Muralist {
                     .text_color(p.muted)
                     .cursor_pointer()
                     .hover(move |s| s.border_color(p.accent).text_color(p.fg))
-                    .when_some(sug.swatch.clone(), |d, hx| {
+                    .when_some(sug.swatch, |d, hx| {
                         d.child(div().size(px(10.)).rounded_full().bg(parse_hex(&hx).unwrap_or(p.muted)))
                     })
                     .child(icon("plus").size_3())

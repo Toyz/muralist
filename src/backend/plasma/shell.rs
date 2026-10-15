@@ -106,10 +106,10 @@ print(r.join("\n"));
             continue;
         };
         let path = PathBuf::from(img.trim().trim_start_matches("file://"));
-        if let Some(m) = monitors.iter().find(|m| pos_key(m.x, m.y) == pos) {
-            if path.is_file() {
-                result.insert(m.name.clone(), path);
-            }
+        if let Some(m) = monitors.iter().find(|m| pos_key(m.x, m.y) == pos)
+            && path.is_file()
+        {
+            result.insert(m.name.clone(), path);
         }
     }
     Ok(result)
@@ -212,12 +212,12 @@ pub(super) fn current_lock(monitors: &[Monitor]) -> Result<BTreeMap<String, Path
                 result.insert(m.name.clone(), PathBuf::from(p));
             }
         }
-    } else if plugin == "org.kde.image" {
-        if let Some(img) = kread(&["Greeter", "Wallpaper", "org.kde.image", "General"], "Image") {
-            let path = PathBuf::from(img.trim_start_matches("file://"));
-            for m in monitors {
-                result.insert(m.name.clone(), path.clone());
-            }
+    } else if plugin == "org.kde.image"
+        && let Some(img) = kread(&["Greeter", "Wallpaper", "org.kde.image", "General"], "Image")
+    {
+        let path = PathBuf::from(img.trim_start_matches("file://"));
+        for m in monitors {
+            result.insert(m.name.clone(), path.clone());
         }
     }
     result.retain(|_, p| p.is_file());
