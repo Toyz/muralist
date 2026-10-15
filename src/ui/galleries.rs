@@ -10,8 +10,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::{
-    GRID_PAD, Item, Muralist, Pal, Tab, bar_field, drag, icon, keycap, kit, no_drag, pal, side_card, side_card_with,
-    with_alpha,
+    GRID_PAD, Item, Muralist, Pal, Tab, bar_field, drag, icon, keycap, kit, no_drag, pal, side_card_with, with_alpha,
 };
 use crate::config::RotateSource;
 use crate::gallery::{Entry, Gallery, SMART_LIMIT, SavedSearch, Source, fetch_source};
@@ -404,122 +403,225 @@ impl Muralist {
         let count = self.galleries.list.len();
         let has_key = self.client.has_key();
 
-        let list = side_card("images", "Galleries", (count > 0).then(|| count.to_string().into()), p)
-            .gap_2()
-            .children(rows)
-            .when(count == 0, |d| {
-                d.child(div().text_xs().text_color(p.muted).child(
-                    "Collect wallpapers into galleries, then rotate through them. Drag a card onto a gallery to add it.",
-                ))
+        let list = side_card_with("images", "Galleries", p, |h| {
+            h.child(kit::Btn::new("new-gallery").icon("plus").ghost().sm().tooltip("New gallery").on_click(
+                cx.listener(|this, _, _, cx| {
+                    let id = this.new_gallery(None, cx);
+                    this.open_gallery(id, cx);
+                }),
+            ))
+            .when(has_key, |d| {
+                d.child(
+                    kit::Btn::new("import-wh")
+                        .icon("download")
+                        .ghost()
+                        .sm()
+                        .tooltip("Import a Wallhaven collection")
+                        .on_click(cx.listener(|this, _, _, cx| this.load_collections(cx))),
+                )
             })
-            .child(
-                h_flex()
-                    .gap_2()
-                    .pt_1()
-                    .child(
-                        kit::Btn::new("new-gallery")
-                            .label("New")
-                            .icon("plus")
-                            .primary()
-                            .sm()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                let id = this.new_gallery(None, cx);
-                                this.open_gallery(id, cx);
-                            }))
-                            .render()
-                            .flex_1(),
-                    )
-                    .when(has_key, |d| {
-                        d.child(
-                            kit::Btn::new("import-wh")
-                                .label("Import")
-                                .icon("download")
-                                .sm()
-                                .tooltip("Import a Wallhaven collection")
-                                .on_click(cx.listener(|this, _, _, cx| this.load_collections(cx)))
-                                .render()
-                                .flex_1(),
-                        )
-                    }),
-            );
+        })
+        .gap_2()
+        .children(rows)
+        .when(count == 0, |d| {
+            d.child(div().text_xs().text_color(p.muted).child(
+                "Collect wallpapers into galleries, then rotate through them. Drag a card onto a gallery to add it.",
+            ))
+        });
 
         v_flex().gap_3().child(list).children(self.render_import(cx))
     }
 
+    /// One gallery as a picture tile, like the tab tiles: grayscale at rest,
+    /// in color on hover or when open, with its actions on hover.
     fn render_gallery_row(&mut self, ix: usize, cx: &mut Context<Self>) -> Stateful<Div> {
+        const R: f32 = 8.;
         let p = pal();
         let covers = self.gallery_covers(ix, 1);
         let g: &Gallery = &self.galleries.list[ix];
         let (id, name, n, offline) = (g.id, g.name.clone(), g.items.len(), g.offline);
         let kind = kind_icon(&g.source);
-        let selected = self.tab == Tab::Galleries && self.gallery == Some(id);
+        let manual = g.source == Source::Manual;
+        let colors: Vec<Hsla> = g
+            .items
+            .iter()
+            .take(3)
+            .flat_map(|e| super::gridmodes::item_colors(&item_of(e), &self.local_palettes))
+            .collect();
+        let c = super::glass::glow_color(&colors).unwrap_or(p.accent);
+        let open = self.tab == Tab::Galleries && self.gallery == Some(id);
         let rotating = self.cfg.rotate_source == RotateSource::Gallery(id) && self.cfg.rotate_minutes > 0;
         let work = self.gallery_work.get(&id).copied();
-        let manual = g.source == Source::Manual;
+        let deleting = self.confirm_delete == Some(id);
+        let group = SharedString::from(format!("gallery-{id}"));
 
-        let cover = h_flex()
-            .flex_none()
-            .w(px(52.))
-            .h(px(34.))
-            .gap(px(1.))
-            .rounded_md()
-            .overflow_hidden()
-            .bg(p.bg)
-            .border_1()
-            .border_color(p.border)
-            .when(covers.is_empty(), |d| d.justify_center().child(icon(kind).size_3p5().text_color(p.dim)))
-            // One picture, rounded on the image itself (the frame's clip is square).
-            .children(
-                covers.into_iter().next().map(|t| super::radius(img(t).size_full().object_fit(ObjectFit::Cover), 5.)),
-            );
-
-        let status: AnyElement = match work {
-            Some(GalleryWork::Refreshing) => Spinner::new().xsmall().color(p.accent).into_any_element(),
-            Some(GalleryWork::Downloading { done, total }) => {
-                div().text_color(p.accent).child(format!("{done}/{total}")).into_any_element()
-            }
-            None => div().into_any_element(),
+        let picture = |gray: bool| {
+            covers.first().cloned().map(|t| {
+                div()
+                    .absolute()
+                    .top(px(1.))
+                    .left(px(1.))
+                    .right(px(1.))
+                    .bottom(px(1.))
+                    .child(super::radius(img(t).size_full().object_fit(ObjectFit::Cover).grayscale(gray), R - 1.))
+            })
         };
+        let status: Option<AnyElement> = match work {
+            Some(GalleryWork::Refreshing) => Some(Spinner::new().xsmall().color(white()).into_any_element()),
+            Some(GalleryWork::Downloading { done, total }) => {
+                Some(div().child(format!("{done}/{total}")).into_any_element())
+            }
+            None => None,
+        };
+        let action = |aid: &'static str, icon_name: &'static str, tip: &'static str, on: bool| {
+            div()
+                .id(aid)
+                .size(px(24.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_md()
+                .cursor_pointer()
+                .bg(if on { with_alpha(c, 0.45) } else { hsla(0., 0., 0., 0.55) })
+                .text_color(white())
+                .hover(|s| s.bg(hsla(0., 0., 0., 0.8)))
+                .tooltip(move |window, cx| Tooltip::new(tip).build(window, cx))
+                .child(icon(icon_name).size_3p5())
+        };
+        let actions = h_flex()
+            .absolute()
+            .top(px(6.))
+            .right(px(6.))
+            .gap_1()
+            // Shown on hover, or while a delete waits for its second click.
+            .when(!deleting, |d| d.invisible().group_hover(group.clone(), |s| s.visible()))
+            .child(action("g-rename", "pencil", "Rename", false).on_click(cx.listener(move |this, _, window, cx| {
+                cx.stop_propagation();
+                this.open_gallery(id, cx);
+                this.start_rename(id, window, cx);
+            })))
+            .child(
+                action(
+                    "g-offline",
+                    "hard-drive-download",
+                    if offline { "Originals kept offline. Click to stop" } else { "Keep originals offline" },
+                    offline,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    let on = this.galleries.get(id).is_some_and(|g| g.offline);
+                    this.set_offline(id, !on, cx);
+                })),
+            )
+            .child(if deleting {
+                div()
+                    .id("g-delete")
+                    .h(px(24.))
+                    .px_2()
+                    .flex()
+                    .items_center()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .bg(p.error)
+                    .text_xs()
+                    .text_color(white())
+                    .child("Delete?")
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.delete_gallery(id, cx);
+                    }))
+            } else {
+                action("g-delete", "trash", "Delete gallery", false).on_click(cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.confirm_delete = Some(id);
+                    cx.notify();
+                }))
+            });
 
-        h_flex()
+        div()
             .id(("gallery-row", id))
-            .gap_2p5()
-            .p_1p5()
-            .mx(px(-6.))
-            .rounded_lg()
-            .border_1()
+            .group(group.clone())
+            .relative()
+            .h(px(58.))
+            .map(|d| super::radius(d, R))
+            .overflow_hidden()
             .cursor_pointer()
+            .bg(linear_gradient(
+                135.,
+                linear_color_stop(with_alpha(c, if open { 0.35 } else { 0.14 }), 0.),
+                linear_color_stop(p.surface2, 1.),
+            ))
+            .when(covers.is_empty(), |d| {
+                d.child(
+                    div()
+                        .absolute()
+                        .left(px(12.))
+                        .top(px(10.))
+                        .child(icon(kind).size(px(22.)).text_color(with_alpha(c, 0.35))),
+                )
+            })
             .map(|d| {
-                if selected {
-                    d.bg(with_alpha(p.accent, 0.12)).border_color(with_alpha(p.accent, 0.45))
+                if open {
+                    d.children(picture(false))
                 } else {
-                    d.border_color(with_alpha(p.border, 0.)).hover(move |s| s.bg(with_alpha(p.elevated, 0.7)))
+                    d.children(picture(true)).child(
+                        div()
+                            .absolute()
+                            .inset_0()
+                            .invisible()
+                            .group_hover(group.clone(), |s| s.visible())
+                            .children(picture(false)),
+                    )
                 }
             })
-            .child(cover)
+            .child(div().absolute().inset_0().map(|d| super::radius(d, R)).bg(linear_gradient(
+                90.,
+                linear_color_stop(hsla(0., 0., 0., 0.78), 0.),
+                linear_color_stop(hsla(0., 0., 0., if open { 0.05 } else { 0.3 }), 1.),
+            )))
             .child(
                 v_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .child(div().text_sm().font_weight(FontWeight::MEDIUM).truncate().child(name))
+                    .absolute()
+                    .left(px(12.))
+                    .right(px(86.))
+                    .top_0()
+                    .bottom_0()
+                    .justify_center()
+                    .child(
+                        div()
+                            .truncate()
+                            .text_sm()
+                            .font_weight(if open { FontWeight::SEMIBOLD } else { FontWeight::MEDIUM })
+                            .text_color(white())
+                            .child(name),
+                    )
                     .child(
                         h_flex()
                             .gap_1p5()
                             .text_xs()
-                            .text_color(p.dim)
+                            .text_color(hsla(0., 0., 1., 0.7))
                             .when(!manual, |d| d.child(icon(kind).size_3()))
-                            .child(n.to_string())
+                            .child(format!("{n} wallpaper{}", if n == 1 { "" } else { "s" }))
                             .when(offline, |d| d.child(icon("hard-drive-download").size_3()))
-                            .when(rotating, |d| d.child(icon("shuffle").size_3().text_color(p.accent)))
-                            .child(status),
+                            .when(rotating, |d| d.child(icon("shuffle").size_3().text_color(c)))
+                            .children(status),
                     ),
+            )
+            .child(actions)
+            // The edge last, so the picture can't paint over it.
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .map(|d| super::radius(d, R))
+                    .border_1()
+                    .border_color(if open { with_alpha(c, 0.8) } else { with_alpha(p.border, 0.6) })
+                    .when(!open, |d| d.group_hover(group.clone(), move |s| s.border_color(with_alpha(c, 0.5)))),
             )
             // Only hand-picked galleries take drops; the others refill themselves.
             .when(manual, |d| {
-                d.drag_over::<drag::CardDrag>(move |s, _, _, _| s.bg(with_alpha(p.accent, 0.2)).border_color(p.accent))
-                    .drag_over::<ExternalPaths>(move |s, _, _, _| {
-                        s.bg(with_alpha(p.accent, 0.2)).border_color(p.accent)
-                    })
+                d.drag_over::<drag::CardDrag>(move |s, _, _, _| s.opacity(0.75))
+                    .drag_over::<ExternalPaths>(move |s, _, _, _| s.opacity(0.75))
                     .on_drop(cx.listener(move |this, drag: &drag::CardDrag, _, cx| {
                         this.add_to_gallery(id, vec![drag.item.clone()], cx);
                     }))
