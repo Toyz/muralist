@@ -204,7 +204,6 @@ impl Muralist {
                 atleast: self.atleast.clone(),
                 resolutions: self.resolutions.clone(),
                 color: None,
-                hide_ai_art: self.hide_ai_art,
                 page: 1,
                 seed: None,
             },

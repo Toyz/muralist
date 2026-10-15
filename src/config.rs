@@ -125,8 +125,6 @@ pub struct FilterOverrides {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub hide_ai_art: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub categories: Option<[bool; 3]>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub purity: Option<[bool; 3]>,
@@ -141,7 +139,6 @@ impl FilterOverrides {
             self.atleast.is_some(),
             self.resolutions.is_some(),
             self.color.is_some(),
-            self.hide_ai_art.is_some(),
             self.categories.is_some(),
             self.purity.is_some(),
         ]

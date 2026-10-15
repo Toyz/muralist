@@ -84,7 +84,6 @@ pub struct SearchParams {
     pub resolutions: Option<String>,
     /// Hex color without '#', from Wallhaven's palette.
     pub color: Option<String>,
-    pub hide_ai_art: bool,
     pub page: u32,
     /// Seed returned by a previous random search, so later pages stay consistent.
     pub seed: Option<String>,
@@ -107,8 +106,6 @@ pub struct UserSettings {
     pub aspect_ratios: Vec<String>,
     #[serde(default)]
     pub toplist_range: String,
-    #[serde(default)]
-    pub ai_art_filter: serde_json::Value,
 }
 
 impl UserSettings {
@@ -131,15 +128,6 @@ impl UserSettings {
 
     pub fn ratios(&self) -> Option<String> {
         Self::joined(&self.aspect_ratios)
-    }
-
-    pub fn hide_ai_art(&self) -> bool {
-        match &self.ai_art_filter {
-            serde_json::Value::Number(n) => n.as_i64() == Some(1),
-            serde_json::Value::String(s) => s == "1",
-            serde_json::Value::Bool(b) => *b,
-            _ => false,
-        }
     }
 }
 
@@ -331,7 +319,6 @@ impl Client {
         if let Some(v) = &p.color {
             query.push(("colors", v.clone()));
         }
-        query.push(("ai_art_filter", if p.hide_ai_art { "1" } else { "0" }.into()));
         if let Some(seed) = &p.seed {
             query.push(("seed", seed.clone()));
         }
@@ -550,7 +537,6 @@ mod tests {
                 atleast: Some("2560x1440".into()),
                 resolutions: None,
                 color: None,
-                hide_ai_art: false,
                 page: 9,
                 seed: None,
             })
@@ -591,7 +577,6 @@ mod tests {
                 atleast: None,
                 resolutions: None,
                 color: None,
-                hide_ai_art: true,
                 page: 1,
                 seed: None,
             })

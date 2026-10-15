@@ -336,7 +336,6 @@ impl Muralist {
             atleast: None,
             resolutions: None,
             color: None,
-            hide_ai_art: self.hide_ai_art,
             page: 1,
             seed: None,
         };

@@ -356,24 +356,6 @@ fn sub_label(title: &str, p: Pal) -> Div {
     v_flex().gap_1p5().child(div().text_xs().text_color(p.dim).child(title.to_owned()))
 }
 
-/// A full-width switch row inside a card.
-fn toggle_line(id: &'static str, label: &str, on: bool, p: Pal) -> Stateful<Div> {
-    h_flex()
-        .id(id)
-        .justify_between()
-        .gap_2()
-        .mx(px(-6.))
-        .px(px(6.))
-        .h(px(32.))
-        .rounded_md()
-        .cursor_pointer()
-        .text_xs()
-        .text_color(p.muted)
-        .hover(move |s| s.bg(with_alpha(p.elevated, 0.7)).text_color(p.fg))
-        .child(label.to_owned())
-        .child(switch(on, p))
-}
-
 fn section(title: &str, p: Pal) -> Div {
     v_flex()
         .gap_2()
@@ -658,7 +640,6 @@ struct Filters {
     atleast: Option<String>,
     resolutions: Option<String>,
     color: Option<String>,
-    hide_ai_art: bool,
     categories: [bool; 3],
     purity: [bool; 3],
 }
@@ -684,9 +665,6 @@ impl Filters {
         if let Some(v) = &o.color {
             self.color = opt(v);
         }
-        if let Some(b) = o.hide_ai_art {
-            self.hide_ai_art = b;
-        }
         if let Some(c) = o.categories.filter(|c| c.iter().any(|b| *b)) {
             self.categories = c;
         }
@@ -711,7 +689,6 @@ impl Filters {
             atleast: (self.atleast != base.atleast).then(|| s(&self.atleast)),
             resolutions: (self.resolutions != base.resolutions).then(|| s(&self.resolutions)),
             color: (self.color != base.color).then(|| s(&self.color)),
-            hide_ai_art: (self.hide_ai_art != base.hide_ai_art).then_some(self.hide_ai_art),
             categories: (self.categories != base.categories).then_some(self.categories),
             purity: (self.purity != base.purity).then_some(self.purity),
         }
@@ -831,7 +808,6 @@ pub struct Muralist {
     atleast: Option<String>,
     resolutions: Option<String>,
     color: Option<String>,
-    hide_ai_art: bool,
     categories: [bool; 3],
     purity: [bool; 3],
 
@@ -1036,7 +1012,6 @@ impl Muralist {
             atleast: None,
             resolutions: None,
             color: None,
-            hide_ai_art: false,
             categories: [true, true, true],
             purity: [true, false, false],
             results: Vec::new(),
@@ -1238,7 +1213,6 @@ impl Muralist {
             atleast: None,
             resolutions: None,
             color: None,
-            hide_ai_art: false,
             categories: [true, true, true],
             purity: [true, false, false],
         };
@@ -1256,7 +1230,6 @@ impl Muralist {
             }
             f.ratios = s.ratios();
             f.resolutions = s.resolutions();
-            f.hide_ai_art = s.hide_ai_art();
         }
         f
     }
@@ -1269,7 +1242,6 @@ impl Muralist {
             atleast: self.atleast.clone(),
             resolutions: self.resolutions.clone(),
             color: self.color.clone(),
-            hide_ai_art: self.hide_ai_art,
             categories: self.categories,
             purity: self.purity,
         }
@@ -1282,7 +1254,6 @@ impl Muralist {
         self.atleast = f.atleast;
         self.resolutions = f.resolutions;
         self.color = f.color;
-        self.hide_ai_art = f.hide_ai_art;
         self.categories = f.categories;
         self.purity = f.purity;
     }
@@ -1689,7 +1660,6 @@ impl Muralist {
             atleast: ov.atleast.or_else(|| self.atleast.clone()),
             resolutions: self.resolutions.clone(),
             color: ov.color.or_else(|| self.color.clone()),
-            hide_ai_art: self.hide_ai_art,
             page: if reset { 1 } else { self.page + 1 },
             seed: if reset { None } else { self.seed.clone() },
         };
@@ -2164,28 +2134,6 @@ impl Muralist {
                     None => h.child(div().text_xs().text_color(p.dim).child("Any")),
                 })
                 .child(div().grid().grid_cols(8).gap_1().child(any_swatch).children(swatches)),
-            );
-
-            // Visibility.
-            let hide_ai = self.hide_ai_art;
-            let spoilers_on = self.cfg.spoiler != crate::config::Spoiler::Off;
-            cards = cards.child(
-                side_card("eye", "Visibility", None, p)
-                    .gap_1()
-                    .child(toggle_line("spoiler-toggle", "Hide NSFW until hover", spoilers_on, p).on_click(
-                        cx.listener(move |this, _, _, cx| {
-                            this.cfg.spoiler =
-                                if spoilers_on { crate::config::Spoiler::Off } else { crate::config::Spoiler::Nsfw };
-                            if let Err(e) = this.cfg.save() {
-                                eprintln!("saving config: {e:#}");
-                            }
-                            cx.notify();
-                        }),
-                    ))
-                    .child(toggle_line("ai", "Hide AI art", hide_ai, p).on_click(cx.listener(|this, _, _, cx| {
-                        this.hide_ai_art = !this.hide_ai_art;
-                        this.search(true, cx);
-                    }))),
             );
         } else if tab == Tab::Library {
             cards = cards.child(
