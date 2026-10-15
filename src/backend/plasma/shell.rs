@@ -44,6 +44,71 @@ fn pos_key(x: i32, y: i32) -> String {
     format!("{x},{y}")
 }
 
+/// Desktop wallpaper plugins that take a picture under the same `Image` / `FillMode`
+/// keys as Plasma's stock image plugin. A screen already running one of these keeps
+/// it and is fed the image in that plugin's own config group; any other plugin is
+/// replaced by the first entry. `org.helba.hudwall` is a shader wallpaper that
+/// renders the image through live effects.
+const IMAGE_PLUGINS: [&str; 2] = ["org.kde.image", "org.helba.hudwall"];
+
+/// JS that picks the image plugin for desktop `d`, as variable `p`.
+fn pick_plugin_js() -> String {
+    format!(
+        "var plugins = {list};\n    var p = plugins.indexOf(d.wallpaperPlugin) >= 0 ? d.wallpaperPlugin : plugins[0];",
+        list = Value::from(IMAGE_PLUGINS.to_vec())
+    )
+}
+
+/// The plasmashell script that sets each screen's image; `by_pos` maps "x,y" to a file URL.
+fn set_desktop_script(by_pos: Map<String, Value>) -> String {
+    // FillMode 2 = PreserveAspectCrop. Only switch plugins when we must: reassigning
+    // the same one reloads the wallpaper and restarts a shader plugin's animation.
+    format!(
+        r#"
+var images = {map};
+var hit = 0;
+var ds = desktops();
+for (var i = 0; i < ds.length; i++) {{
+    var d = ds[i];
+    if (d.screen < 0) continue;
+    var g = screenGeometry(d.screen);
+    var img = images[g.x + "," + g.y];
+    if (!img) continue;
+    {pick}
+    if (d.wallpaperPlugin != p) d.wallpaperPlugin = p;
+    d.currentConfigGroup = ["Wallpaper", p, "General"];
+    d.writeConfig("Image", img);
+    d.writeConfig("FillMode", 2);
+    hit++;
+}}
+print(hit);
+"#,
+        map = Value::Object(by_pos),
+        pick = pick_plugin_js()
+    )
+}
+
+/// The plasmashell script that prints "x,y<TAB>image URL" for every screen on an image plugin.
+fn read_desktop_script() -> String {
+    format!(
+        r#"
+var ds = desktops();
+var r = [];
+for (var i = 0; i < ds.length; i++) {{
+    var d = ds[i];
+    if (d.screen < 0) continue;
+    {pick}
+    if (d.wallpaperPlugin != p) continue;
+    var g = screenGeometry(d.screen);
+    d.currentConfigGroup = ["Wallpaper", p, "General"];
+    r.push(g.x + "," + g.y + "\t" + d.readConfig("Image"));
+}}
+print(r.join("\n"));
+"#,
+        pick = pick_plugin_js()
+    )
+}
+
 /// Set each monitor's desktop wallpaper. Monitors missing from `images` are left alone.
 pub(super) fn apply_desktop(images: &BTreeMap<String, PathBuf>, monitors: &[Monitor]) -> Result<()> {
     let mut by_pos = Map::new();
@@ -55,29 +120,7 @@ pub(super) fn apply_desktop(images: &BTreeMap<String, PathBuf>, monitors: &[Moni
     if by_pos.is_empty() {
         bail!("nothing assigned to any monitor");
     }
-    // FillMode 2 = PreserveAspectCrop.
-    let script = format!(
-        r#"
-var images = {map};
-var hit = 0;
-var ds = desktops();
-for (var i = 0; i < ds.length; i++) {{
-    var d = ds[i];
-    if (d.screen < 0) continue;
-    var g = screenGeometry(d.screen);
-    var img = images[g.x + "," + g.y];
-    if (!img) continue;
-    d.wallpaperPlugin = "org.kde.image";
-    d.currentConfigGroup = ["Wallpaper", "org.kde.image", "General"];
-    d.writeConfig("Image", img);
-    d.writeConfig("FillMode", 2);
-    hit++;
-}}
-print(hit);
-"#,
-        map = Value::Object(by_pos)
-    );
-    let out = evaluate_script(&script)?;
+    let out = evaluate_script(&set_desktop_script(by_pos))?;
     if out.trim().parse::<u32>().unwrap_or(0) == 0 {
         bail!("plasmashell matched no screens; monitor layout may have changed");
     }
@@ -86,20 +129,7 @@ print(hit);
 
 /// Read the current desktop wallpaper of each monitor.
 pub(super) fn current_desktop(monitors: &[Monitor]) -> Result<BTreeMap<String, PathBuf>> {
-    let out = evaluate_script(
-        r#"
-var ds = desktops();
-var r = [];
-for (var i = 0; i < ds.length; i++) {
-    var d = ds[i];
-    if (d.screen < 0 || d.wallpaperPlugin != "org.kde.image") continue;
-    var g = screenGeometry(d.screen);
-    d.currentConfigGroup = ["Wallpaper", "org.kde.image", "General"];
-    r.push(g.x + "," + g.y + "\t" + d.readConfig("Image"));
-}
-print(r.join("\n"));
-"#,
-    )?;
+    let out = evaluate_script(&read_desktop_script())?;
     let mut result = BTreeMap::new();
     for line in out.lines() {
         let Some((pos, img)) = line.split_once('\t') else {
@@ -247,6 +277,40 @@ mod tests {
         assert!(!current.is_empty(), "no org.kde.image wallpapers found");
         apply_desktop(&current, &monitors).unwrap();
         assert_eq!(current_desktop(&monitors).unwrap(), current);
+    }
+}
+
+#[cfg(test)]
+mod script_tests {
+    use super::*;
+
+    fn set_script() -> String {
+        let mut by_pos = Map::new();
+        by_pos.insert("0,0".into(), Value::String("file:///a.png".into()));
+        set_desktop_script(by_pos)
+    }
+
+    #[test]
+    fn set_keeps_image_capable_plugins_and_writes_their_group() {
+        let s = set_script();
+        assert!(s.contains(r#"var plugins = ["org.kde.image","org.helba.hudwall"];"#));
+        assert!(s.contains("if (d.wallpaperPlugin != p) d.wallpaperPlugin = p;"));
+        assert!(s.contains(r#"d.currentConfigGroup = ["Wallpaper", p, "General"];"#));
+        // The old unconditional switch to the stock plugin must be gone.
+        assert!(!s.contains(r#"d.wallpaperPlugin = "org.kde.image""#));
+    }
+
+    #[test]
+    fn read_follows_the_active_image_plugin() {
+        let s = read_desktop_script();
+        assert!(s.contains("if (d.wallpaperPlugin != p) continue;"));
+        assert!(s.contains(r#"d.currentConfigGroup = ["Wallpaper", p, "General"];"#));
+        assert!(!s.contains(r#""org.kde.image", "General""#));
+    }
+
+    #[test]
+    fn stock_plugin_is_the_fallback() {
+        assert_eq!(IMAGE_PLUGINS[0], "org.kde.image");
     }
 }
 
