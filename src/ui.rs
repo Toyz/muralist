@@ -961,6 +961,8 @@ pub struct Muralist {
     galleries: Galleries,
     /// What each saved wallpaper is (see `crate::provenance`).
     provenance: crate::provenance::Provenance,
+    /// Wallhaven IDs being looked up right now.
+    provenance_pending: HashSet<String>,
     /// The gallery the Galleries tab shows.
     gallery: Option<u64>,
     gallery_work: HashMap<u64, galleries::GalleryWork>,
@@ -1200,6 +1202,7 @@ impl Muralist {
             tab: Tab::Discover,
             galleries: Galleries::load(),
             provenance: crate::provenance::Provenance::load(),
+            provenance_pending: HashSet::new(),
             gallery: None,
             gallery_work: HashMap::new(),
             import: None,
@@ -1507,9 +1510,20 @@ impl Muralist {
             Item::Remote(w) => w.resolution.split_once('x').and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?))),
             Item::Local(path) => image::image_dimensions(path).ok(),
         };
-        if let Item::Remote(w) = &item {
-            self.load_info(w.id.clone(), false, cx);
-            self.load_similar(w.id.clone(), cx);
+        match &item {
+            Item::Remote(w) => {
+                self.load_info(w.id.clone(), false, cx);
+                self.load_similar(w.id.clone(), cx);
+            }
+            // A saved file reads as its Wallhaven wallpaper once its origin
+            // is known; look it up now if it isn't.
+            Item::Local(path) => match self.provenance.of(path).map(|r| r.wallpaper.id.clone()) {
+                Some(id) => {
+                    self.load_info(id.clone(), false, cx);
+                    self.load_similar(id, cx);
+                }
+                None => self.lookup_provenance(path.clone(), cx),
+            },
         }
         self.xray = None;
         self.selected = Some(item);
@@ -3856,6 +3870,39 @@ impl Muralist {
         .detach();
     }
 
+    /// Looks up what a saved file is, straight away (it was just selected).
+    fn lookup_provenance(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        let Some(id) = crate::provenance::wallhaven_id(&path) else { return };
+        if !self.provenance_pending.insert(id.clone()) {
+            return;
+        }
+        let client = self.client.clone();
+        cx.spawn(async move |this, cx| {
+            let query = id.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move { client.wallpaper(&query).and_then(|w| crate::provenance::remember(&w)) })
+                .await;
+            this.update(cx, |this, cx| {
+                this.provenance_pending.remove(&id);
+                match result {
+                    Ok(()) => {
+                        this.provenance = crate::provenance::Provenance::load();
+                        // Still looking at it: bring in its details too.
+                        if matches!(&this.selected, Some(Item::Local(p)) if *p == path) {
+                            this.load_info(id.clone(), false, cx);
+                            this.load_similar(id.clone(), cx);
+                        }
+                    }
+                    Err(e) => this.set_status(format!("Couldn't look up wallhaven-{id}: {e:#}"), true, cx),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Looks up what library files are, for ones saved before muralist
     /// kept track: their names carry the Wallhaven ID. Throttled well under
     /// the API's 45 requests a minute, and capped per session.
@@ -3876,6 +3923,14 @@ impl Muralist {
         cx.spawn(async move |this, cx| {
             let mut found = 0;
             for id in ids {
+                let skip = this
+                    .update(cx, |this, _| {
+                        this.provenance.records.contains_key(&id) || this.provenance_pending.contains(&id)
+                    })
+                    .unwrap_or(true);
+                if skip {
+                    continue;
+                }
                 let client = client.clone();
                 let got = cx
                     .background_executor()
