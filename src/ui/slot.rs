@@ -228,10 +228,12 @@ impl Muralist {
         let count = slot.reels.len();
         // The faces stay up while the originals download.
         self.landing = slot.reels.iter().map(|r| (r.monitor.clone(), r.outcome.clone())).collect();
+        // Set as one, once the last original has landed.
+        self.apply_when_landed = Some(slot.targets.clone());
         for reel in slot.reels {
             self.assign_item(Item::Remote(reel.outcome), slot.targets.clone(), Placement::Monitor(reel.monitor), cx);
         }
-        self.set_status(format!("{} {count} wallpapers, press Apply to set them", slot.label), false, cx);
+        self.set_status(format!("{} {count} wallpapers, setting them...", slot.label), false, cx);
     }
 
     /// What a spinning (or freshly stopped) reel shows on `monitor`.

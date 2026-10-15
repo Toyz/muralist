@@ -308,24 +308,13 @@ impl Muralist {
                     .gap_1p5()
                     .when(!hovered, gpui_kit::Styled::invisible)
                     .child(
-                        h_flex()
-                            .gap_1p5()
-                            .child(
-                                kit::Btn::new(("hist-stage", ix))
-                                    .label("Restore")
-                                    .icon("rotate-ccw")
-                                    .sm()
-                                    .tooltip("Stage it on your screens to review")
-                                    .on_click(cx.listener(move |this, _, _, cx| this.restore_history(ix, false, cx))),
-                            )
-                            .child(
-                                kit::Btn::new(("hist-apply", ix))
-                                    .label("Apply")
-                                    .icon("check")
-                                    .primary()
-                                    .sm()
-                                    .on_click(cx.listener(move |this, _, _, cx| this.restore_history(ix, true, cx))),
-                            ),
+                        kit::Btn::new(("hist-set", ix))
+                            .label("Set again")
+                            .icon("rotate-ccw")
+                            .primary()
+                            .sm()
+                            .tooltip("Put this set back up")
+                            .on_click(cx.listener(move |this, _, _, cx| this.restore_history(ix, cx))),
                     )
                     .when(!is_lock, |d| {
                         d.child(
@@ -583,7 +572,8 @@ impl Muralist {
         v_flex().gap_3().child(calendar).child(stats)
     }
 
-    fn restore_history(&mut self, ix: usize, apply: bool, cx: &mut Context<Self>) {
+    /// Puts a past set back up, there and then.
+    fn restore_history(&mut self, ix: usize, cx: &mut Context<Self>) {
         let Some(entry) = self.applied.history.get(ix).cloned() else {
             return;
         };
@@ -601,11 +591,7 @@ impl Muralist {
             self.target = TargetMode::Desktop;
             Target::Desktop
         };
-        if apply {
-            self.apply(vec![target], cx);
-        } else {
-            self.set_status("Restored, press Apply to set it", false, cx);
-        }
+        self.apply(vec![target], cx);
     }
 
     pub(super) fn clear_history(&mut self, cx: &mut Context<Self>) {

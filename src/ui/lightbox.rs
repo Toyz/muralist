@@ -10,8 +10,8 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::{
-    FullPhase, Item, Muralist, Placement, Tab, boxed, develop, develop_bands, fade_in, file_name, glass, gridmodes,
-    headers, icon, kit, local_key, mib, pal, progress_line, purity_color, radius, segment, segmented_track, with_alpha,
+    FullPhase, Item, Muralist, Tab, boxed, develop, develop_bands, fade_in, file_name, glass, gridmodes, headers, icon,
+    kit, local_key, mib, pal, progress_line, purity_color, radius, segment, segmented_track, with_alpha,
 };
 use crate::span::{self, Framing};
 
@@ -1082,7 +1082,6 @@ impl Muralist {
         let c = glass::glow_color(&self.selected_colors()).unwrap_or(p.accent);
         let aiming = self.lb_set_hover;
         let screens = self.monitors.len();
-        let set_item = item.clone();
         // More like this: the search that found the lookalikes (like: is
         // challenged by Wallhaven now).
         let like = match item {
@@ -1154,10 +1153,11 @@ impl Muralist {
                     cx.notify();
                 }
             }))
-            .on_click(cx.listener(move |this, _, _, cx| {
-                let targets = this.target.targets();
-                this.assign_item_then(set_item.clone(), targets, Placement::All, true, cx);
-            }));
+            // Setting always goes through the composer: the whole picture on
+            // every screen unless you frame it otherwise there.
+            .on_click(
+                cx.listener(|this, _, _, cx| this.open_composer(super::span_editor::ComposeMode::Every, None, cx)),
+            );
         let caption = v_flex()
             .items_center()
             .child(div().text_sm().font_weight(FontWeight::BOLD).text_color(white()).child("Set"))
@@ -1174,13 +1174,6 @@ impl Muralist {
         let tools = v_flex()
             .items_center()
             .gap_1()
-            .child(
-                tool("lb-compose", "crop", "Compose: frame each screen, turn, mirror, or span")
-                    .on_click(
-                        cx.listener(|this, _, _, cx| this.open_composer(super::span_editor::ComposeMode::Each, cx)),
-                    )
-                    .render(),
-            )
             .child(save_btn.render())
             .when(remote, |d| {
                 d.child(

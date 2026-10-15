@@ -1116,6 +1116,8 @@ pub struct Muralist {
     lb_develop_watch: Option<String>,
     /// The pointer is on the lightbox's Set button: the desk shows the result.
     lb_set_hover: bool,
+    /// A spin's screens, to set together once every original has landed.
+    apply_when_landed: Option<Vec<Target>>,
     focus: FocusHandle,
 
     pool: ThumbPool,
@@ -1374,6 +1376,7 @@ impl Muralist {
             lb_drag: None,
             lb_develop_watch: None,
             lb_set_hover: false,
+            apply_when_landed: None,
             focus: cx.focus_handle(),
             pool,
             thumbs: HashMap::new(),
@@ -2198,14 +2201,6 @@ impl Muralist {
         .detach();
     }
 
-    fn assign(&mut self, targets: Vec<Target>, placement: Placement, cx: &mut Context<Self>) {
-        let Some(item) = self.selected.clone() else {
-            self.set_status("Pick a wallpaper first", true, cx);
-            return;
-        };
-        self.assign_item(item, targets, placement, cx);
-    }
-
     fn assign_item(&mut self, item: Item, targets: Vec<Target>, placement: Placement, cx: &mut Context<Self>) {
         self.assign_item_then(item, targets, placement, false, cx);
     }
@@ -2286,8 +2281,10 @@ impl Muralist {
                         this.refresh_library();
                         if then_apply {
                             this.apply(targets.clone(), cx);
-                        } else {
-                            this.set_status("Staged. Press Apply to set it.", false, cx);
+                        } else if this.landing.is_empty()
+                            && let Some(targets) = this.apply_when_landed.take()
+                        {
+                            this.apply(targets, cx);
                         }
                     }
                     Err(e) => this.set_status(format!("Failed: {e:#}"), true, cx),
@@ -3985,18 +3982,6 @@ impl Muralist {
                             }))
                             .render()
                     }))
-                    .child(
-                        kit::Btn::new("pv-compose")
-                            .icon("crop")
-                            .ghost()
-                            .sm()
-                            .tooltip("Compose: frame each screen, turn, mirror")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                cx.stop_propagation();
-                                this.open_composer(span_editor::ComposeMode::Each, cx)
-                            }))
-                            .render(),
-                    )
                     .child(
                         kit::Btn::new("pv-full")
                             .icon("maximize")

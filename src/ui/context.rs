@@ -8,8 +8,7 @@ use gpui_kit::*;
 
 use super::galleries::entry_of;
 use super::{
-    Item, Muralist, Placement, box_ratio, boxed, file_name, glass, gridmodes, icon, pal, purity_color, radius,
-    with_alpha,
+    Item, Muralist, box_ratio, boxed, file_name, glass, gridmodes, icon, pal, purity_color, radius, with_alpha,
 };
 use crate::gallery::Source;
 
@@ -102,15 +101,24 @@ impl Muralist {
         }
         let Some(item) = self.context.as_ref().filter(|m| !m.closing).map(|m| m.item.clone()) else { return };
         self.close_context(cx);
-        let targets = self.target.targets();
         match action {
-            Action::SetAll => self.assign_item_then(item, targets, Placement::All, true, cx),
-            Action::SetOn(name) => self.assign_item_then(item, targets, Placement::Monitor(name), true, cx),
+            // Setting goes through the composer, opened on the right screens.
+            Action::SetAll => {
+                self.select(item, window, cx);
+                self.open_composer(super::span_editor::ComposeMode::Every, None, cx);
+            }
+            Action::SetOn(name) => {
+                self.select(item, window, cx);
+                self.open_composer(super::span_editor::ComposeMode::One, Some(name), cx);
+            }
             Action::Span => {
                 self.select(item, window, cx);
                 self.open_span_editor(cx);
             }
-            Action::Similar(id) => self.search_for(format!("like:{id}"), window, cx),
+            Action::Similar(id) => {
+                let query = self.similar_query.get(&id).cloned().unwrap_or_else(|| format!("like:{id}"));
+                self.search_for(query, window, cx);
+            }
             Action::Download => {
                 self.select(item, window, cx);
                 self.download_selected(cx);

@@ -13,9 +13,10 @@ use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use super::span_editor::ComposeMode;
 use super::{
-    LockMode, Muralist, Pal, Placement, Reach, Target, TargetMode, boxed, drag, hex, icon, kit, on_accent, pal, radius,
-    segment, segmented_track, with_alpha,
+    LockMode, Muralist, Pal, Reach, Target, TargetMode, boxed, drag, hex, icon, kit, on_accent, pal, radius, segment,
+    segmented_track, with_alpha,
 };
 
 /// Corner radius of a screen tile, shared by its picture and its edge.
@@ -112,16 +113,6 @@ impl Muralist {
                 pending.iter().filter(|(k, v)| applied.get(*k) != Some(*v)).count()
             })
             .sum()
-    }
-
-    /// Puts the staged screens back to what's actually up.
-    pub(super) fn discard_staged(&mut self, cx: &mut Context<Self>) {
-        self.desktop = self.applied.desktop.clone();
-        self.lock = self.applied.lock.clone();
-        self.landing.clear();
-        self.stage_gen += 1;
-        self.set_status("Staged changes discarded", false, cx);
-        cx.notify();
     }
 
     /// Width and height of the whole monitor arrangement, in desktop units.
@@ -270,15 +261,18 @@ impl Muralist {
                     ))
                     .when(has_selection, |d| d.hover(move |s| s.opacity(0.9)))
                     .drag_over::<drag::CardDrag>(move |s, _, _, _| s.opacity(0.75))
+                    // Dropping a card on a screen, or clicking one, opens the
+                    // composer for just that screen.
                     .on_drop(cx.listener({
                         let name = name.clone();
                         move |this, drag: &drag::CardDrag, window, cx| {
                             this.select(drag.item.clone(), window, cx);
-                            this.assign_item(drag.item.clone(), vec![target], Placement::Monitor(name.clone()), cx);
+                            this.open_composer(ComposeMode::One, Some(name.clone()), cx);
                         }
                     }))
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.assign(vec![target], Placement::Monitor(name.clone()), cx);
+                        let _ = target;
+                        this.open_composer(ComposeMode::One, Some(name.clone()), cx);
                     }))
             })
             .collect();
@@ -491,15 +485,15 @@ impl Muralist {
             tile(
                 "fill-all",
                 "layout-dashboard",
-                "Fill all",
-                "Put the selected wallpaper on every screen",
+                "Every screen",
+                "Put the selected wallpaper on every screen, framing each as you like",
                 has_selection,
             )
             .when(has_selection, |d| {
-                d.on_click(cx.listener(|this, _, _, cx| this.assign(this.target.targets(), Placement::All, cx)))
+                d.on_click(cx.listener(|this, _, _, cx| this.open_composer(ComposeMode::Every, None, cx)))
             })
             .into_any_element(),
-            tile("span", "frame", "Span", "Stretch the selected wallpaper across every screen", has_selection)
+            tile("span", "frame", "Span", "One picture across every screen", has_selection)
                 .when(has_selection, |d| d.on_click(cx.listener(|this, _, _, cx| this.open_span_editor(cx))))
                 .into_any_element(),
         ];
@@ -507,8 +501,8 @@ impl Muralist {
             tiles.push(
                 tile("copy-desktop", "copy", "Copy", "Use the desktop's wallpapers on the lock screen", true)
                     .on_click(cx.listener(|this, _, _, cx| {
-                        this.lock = this.desktop.clone();
-                        cx.notify();
+                        this.lock = this.applied.desktop.clone();
+                        this.apply(vec![Target::Lock], cx);
                     }))
                     .into_any_element(),
             );
@@ -557,33 +551,16 @@ impl Muralist {
             StepState::Waiting
         };
 
-        // ---- 4. Apply -------------------------------------------------------
-        let apply_body = if staged {
-            h_flex()
-                .gap_2()
-                .child(
-                    div().flex_1().child(
-                        kit::Btn::new("apply")
-                            .label(if fetching > 0 {
-                                format!("Fetching {fetching}")
-                            } else {
-                                format!("Apply {changes} change{}", if changes == 1 { "" } else { "s" })
-                            })
-                            .icon("check")
-                            .primary()
-                            .lg()
-                            .full()
-                            .loading(busy)
-                            .on_click(cx.listener(|this, _, _, cx| this.apply(this.target.targets(), cx))),
-                    ),
-                )
-                .child(
-                    kit::Btn::new("discard")
-                        .icon("undo-2")
-                        .lg()
-                        .tooltip("Discard staged changes")
-                        .on_click(cx.listener(|this, _, _, cx| this.discard_staged(cx))),
-                )
+        // ---- 4. Set ---------------------------------------------------------
+        // Setting always goes through the composer, which puts it up at once.
+        let apply_body = if busy || fetching > 0 {
+            kit::Btn::new("setting")
+                .label("Setting...")
+                .icon("check")
+                .primary()
+                .lg()
+                .full()
+                .loading(true)
                 .into_any_element()
         } else if has_selection {
             v_flex()
@@ -595,13 +572,14 @@ impl Muralist {
                         .primary()
                         .lg()
                         .full()
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            if let Some(item) = this.selected.clone() {
-                                this.assign_item_then(item, this.target.targets(), Placement::All, true, cx);
-                            }
-                        })),
+                        .on_click(cx.listener(|this, _, _, cx| this.open_composer(ComposeMode::Every, None, cx))),
                 )
-                .child(div().text_xs().text_color(p.dim).child("Fills every screen and applies it in one go."))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(p.dim)
+                        .child("Choose every screen, one screen or a span, frame it if you like, and set it."),
+                )
                 .into_any_element()
         } else {
             h_flex()
@@ -632,7 +610,7 @@ impl Muralist {
             .child(step(1, "Wallpaper", s1, false, None, wallpaper, p))
             .child(step(2, "Where", s2, false, None, where_body, p))
             .child(step(3, "Screens", s3, false, Some(screen_status), screens, p))
-            .child(step(4, "Apply", s4, true, None, apply, p))
+            .child(step(4, "Set", s4, true, None, apply, p))
             .into_any_element()
     }
 }
