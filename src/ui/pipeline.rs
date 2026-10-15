@@ -14,8 +14,8 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::{
-    InspectorTab, Item, LockMode, Muralist, Pal, Placement, Reach, Target, TargetMode, details, drag, hex, icon, kit,
-    on_accent, pal, radius, segment, segmented_track, with_alpha,
+    InspectorTab, Item, LockMode, Muralist, Pal, Placement, Reach, Target, TargetMode, boxed, details, drag, hex, icon,
+    kit, on_accent, pal, radius, segment, segmented_track, with_alpha,
 };
 
 /// Corner radius of a screen tile, shared by its picture and its edge.
@@ -186,11 +186,10 @@ impl Muralist {
                         // Inset under the edge, so the picture's soft corner
                         // can't show past the edge's own.
                         Some(t) => d.child(
-                            // Sized in pixels: percentages of an inset-only box
-                            // don't resolve, and the image would hang past the tile.
+                            // Sized to the tile exactly (see `boxed`).
                             div().absolute().top(px(1.)).left(px(1.)).w(px(tile_w - 2.)).h(px(tile_h - 2.)).child(
                                 radius(
-                                    img(t).w(px(tile_w - 2.)).h(px(tile_h - 2.)).object_fit(ObjectFit::Cover),
+                                    boxed(img(t), tile_w - 2., tile_h - 2.).object_fit(ObjectFit::Cover),
                                     TILE_R - 1.,
                                 ),
                             ),

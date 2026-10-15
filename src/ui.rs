@@ -214,6 +214,23 @@ const WALLHAVEN_COLORS: [&str; 29] = [
 
 /// GPUI clips children to a rectangle, not to rounded corners, so every layer
 /// touching a rounded edge must carry its own radius.
+/// An image that fills a `w` x `h` box exactly. GPUI gives an image its
+/// picture's aspect ratio unless one is set, and that wins over the height
+/// it's given: an image filling a box of another shape grows taller than
+/// the box and hangs past its rounded edge. Pinning the box's own ratio
+/// keeps it inside. Sets the size too.
+fn boxed(mut i: Img, w: f32, h: f32) -> Img {
+    i.style().aspect_ratio = Some(w / h.max(1.));
+    i.w(px(w)).h(px(h))
+}
+
+/// Like [`boxed`], for an image sized by its parent (`size_full`): just
+/// pins the box's ratio.
+fn box_ratio(mut i: Img, w: f32, h: f32) -> Img {
+    i.style().aspect_ratio = Some(w / h.max(1.));
+    i
+}
+
 fn radius<E: Styled>(mut e: E, r: f32) -> E {
     e.style().corner_radii = CornersRefinement {
         top_left: Some(px(r).into()),
@@ -2206,6 +2223,8 @@ impl Muralist {
             Some(compact_count(self.applied.history.len() as u64)),
         ];
 
+        // Two tiles a row, inside the sidebar's 12px padding and border.
+        let tile_w = ((self.side_w - 1. - 24. - 6.) / 2.).floor();
         let tile = |ix: usize,
                     id: &'static str,
                     icon_name: &'static str,
@@ -2221,11 +2240,9 @@ impl Muralist {
             let layer = |path: PathBuf, gray: bool| {
                 // Rounded on the image itself (the tile's clip is square), and
                 // inset under the edge so its soft corner stays hidden.
-                // Explicit height: a percentage of a box sized only by its
-                // insets doesn't resolve, and the image would fall back to
-                // its own aspect and hang past the tile.
-                div().absolute().top(px(1.)).left(px(1.)).right(px(1.)).h(px(NAV_TILE_H - 2.)).child(radius(
-                    img(path).w_full().h(px(NAV_TILE_H - 2.)).object_fit(ObjectFit::Cover).grayscale(gray),
+                // Sized to the tile exactly (see `boxed`).
+                div().absolute().top(px(1.)).left(px(1.)).w(px(tile_w - 2.)).h(px(NAV_TILE_H - 2.)).child(radius(
+                    boxed(img(path), tile_w - 2., NAV_TILE_H - 2.).object_fit(ObjectFit::Cover).grayscale(gray),
                     NAV_TILE_R - 1.,
                 ))
             };
@@ -2258,6 +2275,7 @@ impl Muralist {
                 .id(id)
                 .group(group.clone())
                 .relative()
+                .w(px(tile_w))
                 .h(px(NAV_TILE_H))
                 .map(|d| radius(d, NAV_TILE_R))
                 .overflow_hidden()
@@ -2924,15 +2942,15 @@ impl Muralist {
 
         let image: AnyElement = match (&thumb, hide) {
             (_, true) => match mosaic {
-                Some(m) => radius(img(m).size_full().object_fit(ObjectFit::Cover), CARD_INNER_R).into_any_element(),
+                Some(m) => radius(box_ratio(img(m).size_full(), w, h).object_fit(ObjectFit::Cover), CARD_INNER_R)
+                    .into_any_element(),
                 None => shimmer(SharedString::from(format!("card-shimmer-{card_key}"))).into_any_element(),
             },
             (Some(path), false) => {
                 let shimmer_id = SharedString::from(format!("card-shimmer-{card_key}"));
                 // Keep the placeholder up while the image decodes: no blank frame.
                 let image = radius(
-                    img(path.clone())
-                        .size_full()
+                    box_ratio(img(path.clone()).size_full(), w, h)
                         .object_fit(ObjectFit::Cover)
                         .with_loading(move || shimmer(shimmer_id.clone()).into_any_element()),
                     CARD_INNER_R,

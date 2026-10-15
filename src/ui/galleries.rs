@@ -437,6 +437,8 @@ impl Muralist {
     fn render_gallery_row(&mut self, ix: usize, cx: &mut Context<Self>) -> Stateful<Div> {
         const R: f32 = 8.;
         const H: f32 = 58.;
+        // The card's width inside the sidebar padding, card border and padding.
+        let row_w = (self.side_w - 1. - 24. - 2. - super::SIDE_CARD_PAD * 2.).floor();
         let p = pal();
         let covers = self.gallery_covers(ix, 1);
         let g: &Gallery = &self.galleries.list[ix];
@@ -458,9 +460,9 @@ impl Muralist {
 
         let picture = |gray: bool| {
             covers.first().cloned().map(|t| {
-                // Explicit height: see the nav tiles.
-                div().absolute().top(px(1.)).left(px(1.)).right(px(1.)).h(px(H - 2.)).child(super::radius(
-                    img(t).w_full().h(px(H - 2.)).object_fit(ObjectFit::Cover).grayscale(gray),
+                // Sized to the tile exactly (see `boxed`).
+                div().absolute().top(px(1.)).left(px(1.)).w(px(row_w - 2.)).h(px(H - 2.)).child(super::radius(
+                    super::boxed(img(t), row_w - 2., H - 2.).object_fit(ObjectFit::Cover).grayscale(gray),
                     R - 1.,
                 ))
             })
@@ -541,6 +543,7 @@ impl Muralist {
             .id(("gallery-row", id))
             .group(group.clone())
             .relative()
+            .w(px(row_w))
             .h(px(H))
             .map(|d| super::radius(d, R))
             .overflow_hidden()

@@ -217,7 +217,10 @@ impl Muralist {
             .border_color(c)
             .bg(p.bg)
             .when_some(thumb, |d, t| {
-                d.child(super::radius(img(t).size_full().object_fit(ObjectFit::Cover), CORE / 2.))
+                d.child(super::radius(
+                    super::boxed(img(t), CORE - 4., CORE - 4.).object_fit(ObjectFit::Cover),
+                    CORE / 2. - 2.,
+                ))
             });
 
         let panel = div()
