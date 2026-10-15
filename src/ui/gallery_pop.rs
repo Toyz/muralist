@@ -10,13 +10,17 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::galleries::item_of;
-use super::{Muralist, boxed, glass, gridmodes, icon, pal, purity_color, radius, with_alpha};
+use super::{Muralist, box_ratio, glass, gridmodes, icon, pal, purity_color, radius, with_alpha};
 use crate::config::RotateSource;
 use crate::gallery::{Entry, Source};
 use crate::wallhaven::Sorting;
 
-const POP_W: f32 = 320.;
-const HERO_H: f32 = 132.;
+/// The grown card: its width, and its height by what it holds.
+const POP_W: f32 = 380.;
+const POP_H_SMART: f32 = 470.;
+const POP_H_COLLECTION: f32 = 300.;
+const POP_H_MANUAL: f32 = 230.;
+const R: f32 = 14.;
 const OPEN_MS: u64 = 200;
 const CLOSE_MS: u64 = 170;
 const LIMITS: [u32; 4] = [24, 48, 96, 192];
@@ -97,8 +101,14 @@ impl Muralist {
             f32::from(origin.size.width),
             f32::from(origin.size.height),
         );
-        let tx = (self.side_w + 10.).min(vw - POP_W - 12.);
-        let ty = (fy - 8.).clamp(12., (vh - 420.).max(12.));
+        // Grow around the tile's own center, like the cards do, kept in the window.
+        let pop_h = match g.source {
+            Source::Smart { .. } => POP_H_SMART,
+            Source::Wallhaven { .. } => POP_H_COLLECTION,
+            Source::Manual => POP_H_MANUAL,
+        };
+        let tx = (fx + fw / 2. - POP_W / 2.).clamp(12., (vw - POP_W - 12.).max(12.));
+        let ty = (fy + fh / 2. - pop_h / 2.).clamp(12., (vh - pop_h - 12.).max(12.));
 
         // ---- quick filters ----
         let chip = |id: ElementId, label: String, on: bool, tint: Option<Hsla>| {
@@ -288,53 +298,42 @@ impl Muralist {
                 }))
             });
 
-        // ---- the popout ----
+        // ---- the card itself: the cover is the whole card ----
         let n = g.items.len();
-        let hero = div()
-            .relative()
-            .w_full()
-            .h(px(HERO_H))
-            .map(|d| radius(d, 12.))
-            .bg(p.bg)
-            .when_some(cover, |d, t| {
-                d.child(radius(boxed(img(t), POP_W - 2., HERO_H).object_fit(ObjectFit::Cover), 12.))
-            })
+        let title = v_flex()
+            .px_3p5()
+            .pt_3()
+            .pb_8()
+            .bg(linear_gradient(
+                180.,
+                linear_color_stop(hsla(0., 0., 0., 0.7), 0.),
+                linear_color_stop(hsla(0., 0., 0., 0.), 1.),
+            ))
             .child(
-                v_flex()
-                    .absolute()
-                    .left_0()
-                    .right_0()
-                    .bottom_0()
-                    .px_3()
-                    .pt_6()
-                    .pb_2p5()
-                    .bg(linear_gradient(
-                        0.,
-                        linear_color_stop(hsla(0., 0., 0., 0.78), 0.),
-                        linear_color_stop(hsla(0., 0., 0., 0.), 1.),
-                    ))
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(white())
-                            .truncate()
-                            .child(g.name.clone()),
-                    )
-                    .child(div().text_xs().text_color(hsla(0., 0., 1., 0.7)).truncate().child(format!(
-                        "{n} wallpaper{}  ·  {}",
-                        if n == 1 { "" } else { "s" },
-                        describe(&g.source)
-                    ))),
-            );
+                div()
+                    .text_base()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(white())
+                    .truncate()
+                    .child(g.name.clone()),
+            )
+            .child(div().text_xs().text_color(hsla(0., 0., 1., 0.75)).truncate().child(format!(
+                "{n} wallpaper{}  ·  {}",
+                if n == 1 { "" } else { "s" },
+                describe(&g.source)
+            )));
+        // Filters and actions on frosted glass over the lower part; the
+        // picture shows through.
         let glass_panel = v_flex()
             .gap_3()
             .p_3()
             .bg(linear_gradient(
                 180.,
-                linear_color_stop(Hsla { l: 0.12, s: c.s.min(0.5), a: 0.96, ..c }, 0.),
-                linear_color_stop(Hsla { l: 0.07, s: c.s.min(0.35), a: 0.98, ..c }, 1.),
+                linear_color_stop(Hsla { l: 0.1, s: c.s.min(0.55), a: 0.72, ..c }, 0.),
+                linear_color_stop(Hsla { l: 0.06, s: c.s.min(0.4), a: 0.92, ..c }, 1.),
             ))
+            .border_t_1()
+            .border_color(with_alpha(c, 0.45))
             .child(filters)
             .when(changed, |d| {
                 d.child(
@@ -351,16 +350,21 @@ impl Muralist {
         let card = v_flex()
             .id("gallery-pop")
             .absolute()
-            .overflow_hidden()
-            .rounded(px(14.))
-            .border_1()
-            .border_color(with_alpha(c, 0.6))
+            .rounded(px(R))
+            .bg(p.bg)
             .shadow_lg()
             .occlude()
-            .child(hero)
-            .child(glass_panel)
+            .child(div().absolute().inset_0().when_some(cover, |d, t| {
+                d.child(radius(box_ratio(img(t).size_full(), POP_W, pop_h).object_fit(ObjectFit::Cover), R))
+            }))
+            .child(div().relative().child(title))
+            .child(div().flex_1())
+            .child(div().relative().map(|d| super::radius_bottom(d, R)).overflow_hidden().child(glass_panel))
+            // Its edge in its own color, on top.
+            .child(div().absolute().inset_0().rounded(px(R)).border_1().border_color(with_alpha(c, 0.7)))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+            // Grow out of the tile, and settle back into it.
             .with_animation(
                 SharedString::from(format!("gallery-pop-{}-{seq}", if closing { "settle" } else { "lift" })),
                 Animation::new(Duration::from_millis(if closing { CLOSE_MS } else { OPEN_MS })).with_easing({
@@ -373,9 +377,8 @@ impl Muralist {
                     d.left(px(lerp(fx, tx)))
                         .top(px(lerp(fy, ty)))
                         .w(px(lerp(fw, POP_W)))
-                        // Opens downward out of the tile's own height.
-                        .max_h(px(lerp(fh, 720.)))
-                        .opacity(0.3 + 0.7 * t)
+                        .h(px(lerp(fh, pop_h)))
+                        .when(closing, |d| d.opacity(0.35 + 0.65 * t))
                 },
             );
 
