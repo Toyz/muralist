@@ -1114,6 +1114,8 @@ pub struct Muralist {
     lb_drag: Option<(Point<Pixels>, bool)>,
     /// The original last seen downloading in the lightbox, to lock on when it lands.
     lb_develop_watch: Option<String>,
+    /// The pointer is on the lightbox's Set button: the desk shows the result.
+    lb_set_hover: bool,
     focus: FocusHandle,
 
     pool: ThumbPool,
@@ -1371,6 +1373,7 @@ impl Muralist {
             lb_scroll: ScrollHandle::new(),
             lb_drag: None,
             lb_develop_watch: None,
+            lb_set_hover: false,
             focus: cx.focus_handle(),
             pool,
             thumbs: HashMap::new(),

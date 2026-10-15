@@ -19,6 +19,9 @@ const TOP: f32 = 96.;
 const FILM_H: f32 = 104.;
 const SIDE: f32 = 84.;
 const PANEL_W: f32 = 340.;
+/// The shutter rail down the right edge.
+const RAIL_W: f32 = 88.;
+const RAIL_RIGHT: f32 = 20.;
 const LOUPE: f32 = 260.;
 const IMG_R: f32 = 10.;
 
@@ -155,7 +158,8 @@ impl Muralist {
         // Stage: the space the image gets.
         let stage_x = SIDE;
         let stage_y = TOP;
-        let stage_w = (cw - SIDE * 2. - if panel { PANEL_W - SIDE + 24. + SIDE } else { 0. }).max(200.);
+        // The rail takes the right edge; the info drawer opens beside it.
+        let stage_w = (cw - SIDE * 2. - RAIL_W - RAIL_RIGHT - if panel { PANEL_W + 12. } else { 0. }).max(200.);
         let stage_h = (ch - TOP - FILM_H - 20.).max(160.);
 
         // Sources.
@@ -1067,109 +1071,168 @@ impl Muralist {
     }
 
     /// Floating glass dock over the image: where it goes and how.
+    /// The shutter rail down the right edge, as on a camera: where it goes
+    /// stacked above a big round shutter that sets it, the tools below.
     fn render_lb_dock(&mut self, item: &Item, cx: &mut Context<Self>) -> AnyElement {
+        use super::TargetMode;
         let p = pal();
         let save_btn = self.gallery_button("lb-gallery", item, cx);
         let mode = self.target;
         let lock_ok = self.backend.lock().is_some();
-        let target_seg = |id: &'static str, label: &'static str, m: super::TargetMode| {
-            segment(id, label, mode == m, p).px_2().on_click(cx.listener(move |this, _, _, cx| {
-                this.target = m;
-                cx.notify();
-            }))
-        };
+        let c = glass::glow_color(&self.selected_colors()).unwrap_or(p.accent);
+        let aiming = self.lb_set_hover;
+        let screens = self.monitors.len();
         let set_item = item.clone();
+        // More like this: the search that found the lookalikes (like: is
+        // challenged by Wallhaven now).
         let like = match item {
-            Item::Remote(w) => Some(format!("like:{}", w.id)),
+            Item::Remote(w) => Some(self.similar_query.get(&w.id).cloned().unwrap_or_else(|| format!("like:{}", w.id))),
             Item::Local(_) => None,
         };
         let remote = matches!(item, Item::Remote(_));
         let info_open = self.lb_panel;
-        let sep = || div().w(px(1.)).h(px(20.)).mx_1().bg(hsla(0., 0., 1., 0.12));
+        let dim = hsla(0., 0., 1., 0.55);
 
-        h_flex()
-            .absolute()
-            .bottom(px(FILM_H + 20.))
-            .left_0()
-            .right_0()
-            .justify_center()
+        // ---- where it goes ----
+        let target = |id: &'static str, icon_name: &'static str, label: &'static str, m: TargetMode| {
+            let on = mode == m;
+            v_flex()
+                .id(id)
+                .w(px(64.))
+                .py_1p5()
+                .items_center()
+                .gap_1()
+                .rounded_lg()
+                .cursor_pointer()
+                .bg(if on { with_alpha(c, 0.18) } else { gpui_kit::transparent_black() })
+                .border_1()
+                .border_color(if on { with_alpha(c, 0.55) } else { gpui_kit::transparent_black() })
+                .hover(move |s| s.bg(hsla(0., 0., 1., 0.06)))
+                .child(icon(icon_name).size_4().text_color(if on { c } else { dim }))
+                .child(
+                    div()
+                        .text_size(px(10.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(if on { white() } else { dim })
+                        .child(label),
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.target = m;
+                    cx.notify();
+                }))
+        };
+
+        // ---- the shutter ----
+        let ink = super::on_accent(c);
+        const SHUTTER: f32 = 64.;
+        let ring = if aiming { 6. } else { 4. };
+        let shutter = div()
+            .id("lb-set-all")
+            .relative()
+            .size(px(SHUTTER))
+            .rounded_full()
+            .cursor_pointer()
+            .border_2()
+            .border_color(with_alpha(c, if aiming { 1. } else { 0.7 }))
+            .shadow(glass::ambilight(c, if aiming { 30. } else { 16. }, if aiming { 0.85 } else { 0.45 }))
             .child(
-                h_flex()
-                    .id("lb-dock")
-                    .occlude()
-                    .gap_1p5()
-                    .p_1p5()
-                    .rounded_xl()
-                    .bg(hsla(0., 0., 0.05, 0.72))
-                    .border_1()
-                    .border_color(hsla(0., 0., 1., 0.1))
-                    .shadow_lg()
-                    .when(lock_ok, |d| {
-                        d.child(
-                            segmented_track(p)
-                                .bg(hsla(0., 0., 0., 0.35))
-                                .border_color(hsla(0., 0., 1., 0.06))
-                                .child(target_seg("lbd-desktop", "Desktop", super::TargetMode::Desktop))
-                                .child(target_seg("lbd-lock", "Lock", super::TargetMode::Lock))
-                                .child(target_seg("lbd-both", "Both", super::TargetMode::Both)),
-                        )
-                    })
-                    .child(
-                        kit::Btn::new("lb-set-all")
-                            .label("Set on all displays")
-                            .icon("check")
-                            .primary()
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                let targets = this.target.targets();
-                                this.assign_item_then(set_item.clone(), targets, Placement::All, true, cx);
-                            }))
-                            .render(),
-                    )
-                    .child(sep())
-                    .child(
-                        kit::Btn::new("lb-span")
-                            .icon("frame")
-                            .ghost()
-                            .tooltip("Span across displays")
-                            .on_click(cx.listener(|this, _, _, cx| this.open_span_editor(cx)))
-                            .render(),
-                    )
-                    .child(save_btn.render())
-                    .when(remote, |d| {
-                        d.child(
-                            kit::Btn::new("lb-dl")
-                                .icon("arrow-down")
-                                .ghost()
-                                .tooltip("Save to library")
-                                .on_click(cx.listener(|this, _, _, cx| this.download_selected(cx)))
-                                .render(),
-                        )
-                    })
-                    .when_some(like, |d, like| {
-                        d.child(
-                            kit::Btn::new("lb-like")
-                                .icon("search")
-                                .ghost()
-                                .tooltip("More like this")
-                                .on_click(
-                                    cx.listener(move |this, _, window, cx| this.search_for(like.clone(), window, cx)),
-                                )
-                                .render(),
-                        )
-                    })
-                    .child(
-                        kit::Btn::new("lb-info")
-                            .icon("info")
-                            .ghost()
-                            .selected(info_open)
-                            .tooltip("Info (I)")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.lb_panel = !this.lb_panel;
-                                cx.notify();
-                            }))
-                            .render(),
-                    ),
+                div()
+                    .absolute()
+                    .top(px(ring))
+                    .left(px(ring))
+                    .size(px(SHUTTER - 4. - ring * 2.))
+                    .rounded_full()
+                    .bg(c)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(icon("check").size(px(22.)).text_color(ink)),
             )
+            .on_hover(cx.listener(|this, over: &bool, _, cx| {
+                if this.lb_set_hover != *over {
+                    this.lb_set_hover = *over;
+                    cx.notify();
+                }
+            }))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                let targets = this.target.targets();
+                this.assign_item_then(set_item.clone(), targets, Placement::All, true, cx);
+            }));
+        let caption = v_flex()
+            .items_center()
+            .child(div().text_sm().font_weight(FontWeight::BOLD).text_color(white()).child("Set"))
+            .child(
+                div()
+                    .text_size(px(10.))
+                    .text_color(dim)
+                    .child(format!("{screens} screen{}", if screens == 1 { "" } else { "s" })),
+            );
+
+        // ---- tools ----
+        let tool =
+            |id: &'static str, name: &'static str, tip: &'static str| kit::Btn::new(id).icon(name).ghost().tooltip(tip);
+        let tools = v_flex()
+            .items_center()
+            .gap_1()
+            .child(
+                tool("lb-span", "frame", "Span across displays")
+                    .on_click(cx.listener(|this, _, _, cx| this.open_span_editor(cx)))
+                    .render(),
+            )
+            .child(save_btn.render())
+            .when(remote, |d| {
+                d.child(
+                    tool("lb-dl", "arrow-down", "Save to library")
+                        .on_click(cx.listener(|this, _, _, cx| this.download_selected(cx)))
+                        .render(),
+                )
+            })
+            .when_some(like, |d, like| {
+                d.child(
+                    tool("lb-like", "images", "More like this")
+                        .on_click(cx.listener(move |this, _, window, cx| this.search_for(like.clone(), window, cx)))
+                        .render(),
+                )
+            })
+            .child(
+                tool("lb-info", "info", "Info (I)")
+                    .selected(info_open)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.lb_panel = !this.lb_panel;
+                        cx.notify();
+                    }))
+                    .render(),
+            );
+
+        let rule = || div().w(px(40.)).h(px(1.)).bg(hsla(0., 0., 1., 0.1));
+        v_flex()
+            .id("lb-rail")
+            .occlude()
+            .absolute()
+            .top(px(TOP))
+            .bottom(px(FILM_H + 8.))
+            .right(px(RAIL_RIGHT))
+            .w(px(RAIL_W))
+            .items_center()
+            .justify_center()
+            .gap_4()
+            .rounded_2xl()
+            .bg(hsla(0., 0., 0.04, 0.55))
+            .border_1()
+            .border_color(with_alpha(c, 0.2))
+            .when(lock_ok, |d| {
+                d.child(
+                    v_flex()
+                        .gap_1()
+                        .child(target("lbd-desktop", "monitor", "Desktop", TargetMode::Desktop))
+                        .child(target("lbd-lock", "lock", "Lock", TargetMode::Lock))
+                        .child(target("lbd-both", "layers", "Both", TargetMode::Both)),
+                )
+                .child(rule())
+            })
+            .child(v_flex().items_center().gap_2().child(shutter).child(caption))
+            .child(rule())
+            .child(tools)
             .into_any_element()
     }
 
@@ -1203,7 +1266,7 @@ impl Muralist {
             .absolute()
             .top(px(TOP))
             .bottom(px(FILM_H + 20.))
-            .right(px(20.))
+            .right(px(RAIL_RIGHT + RAIL_W + 12.))
             .w(px(PANEL_W))
             .rounded_xl()
             .bg(with_alpha(p.surface, 0.9))
