@@ -6,6 +6,8 @@ description = "A Wallhaven wallpaper manager for multi-monitor Linux desktops, b
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/Toyz/muralist"
 readme = "README.md"
+# Screenshots and CI config stay on GitHub; the README links to them.
+exclude = ["docs/", ".github/"]
 keywords = ["wallpaper", "wallhaven", "gpui", "kde", "desktop"]
 categories = ["gui"]
 

@@ -1,67 +1,149 @@
+<div align="center">
+
+<img src="https://raw.githubusercontent.com/Toyz/muralist/main/docs/logo.svg" width="96" alt="muralist logo">
+
 # muralist
 
-A wallpaper manager for multi-monitor Linux desktops. It searches
-[Wallhaven](https://wallhaven.cc), downloads at full speed, and puts images on
-every monitor, for both the desktop and the lock screen. Built with
-[GPUI](https://www.gpui.rs/).
+**The most over-engineered wallpaper manager you will ever install.**
 
-It is, by any reasonable measure, far too much software for setting a
-wallpaper.
+Search [Wallhaven](https://wallhaven.cc), then put wallpapers on every monitor,
+desktop and lock screen alike. Native, GPU-rendered, built with [GPUI](https://www.gpui.rs/).
+
+[![CI](https://github.com/Toyz/muralist/actions/workflows/ci.yml/badge.svg)](https://github.com/Toyz/muralist/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/muralist.svg)](https://crates.io/crates/muralist)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-8b5cf6.svg)](#license)
+![Platforms](https://img.shields.io/badge/platforms-KDE%20Plasma%20%7C%20Windows%20%7C%20macOS-22d3ee.svg)
+
+<br>
+
+<img src="https://raw.githubusercontent.com/Toyz/muralist/main/docs/screenshots/main.webp" alt="muralist: a grid of wallpapers, the selected one tinting the whole interface, and three screens staged on the right">
+
+<sub>The whole interface takes on the selected wallpaper's colors. Pick, place, apply: top to bottom on the right.</sub>
+
+</div>
+
+<br>
+
+## Why
+
+Setting a wallpaper is a solved problem. muralist solves it again, with a
+cursor-trajectory predictor that starts downloading the wallpaper you are
+about to click, a theme engine that recolors itself around every image while
+keeping text above WCAG contrast, and a slot machine. It is, by any reasonable
+measure, far too much software for setting a wallpaper. It is also really
+nice to use.
+
+<br>
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+### The card is the menu
+
+Right-click a wallpaper and the card itself lifts out of the grid and becomes
+the menu: your screens along the top, actions on frosted glass in the image's
+own colors, a shortcut key on each. The full original starts downloading the
+moment you right-click, and sharpens in when it lands.
+
+</td>
+<td width="50%">
+
+<img src="https://raw.githubusercontent.com/Toyz/muralist/main/docs/screenshots/context.webp" alt="A wallpaper card lifted out of the grid, its actions on frosted glass">
+
+</td>
+</tr>
+<tr>
+<td width="50%">
+
+<img src="https://raw.githubusercontent.com/Toyz/muralist/main/docs/screenshots/info.webp" alt="Info for a wallpaper: fit check across three displays, palette, tags">
+
+</td>
+<td width="50%" valign="top">
+
+### Everything about a wallpaper
+
+Fit check across your real monitors (will it be sharp, how much does a span
+crop), its palette with an X-ray that shows where each color lives, uploader,
+source and tags, and wallpapers like it. All in one modal, the picture large
+beside it.
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+### Galleries that keep themselves
+
+Hand-pick galleries by dragging cards onto them, save any search as a smart
+gallery that refreshes daily, or import your Wallhaven collections. Keep one
+offline and its originals download in the background, then let auto-rotate
+play through it.
+
+</td>
+<td width="50%">
+
+<img src="https://raw.githubusercontent.com/Toyz/muralist/main/docs/screenshots/galleries.webp" alt="The Galleries tab with picture tiles for each gallery">
+
+</td>
+</tr>
+<tr>
+<td width="50%">
+
+<img src="https://raw.githubusercontent.com/Toyz/muralist/main/docs/screenshots/settings.webp" alt="Settings, Auto-rotate section">
+
+</td>
+<td width="50%" valign="top">
+
+### Rotation that reads the clock
+
+Fresh wallpapers on a timer, darker at night and brighter by day, from your
+current search, your library, or a gallery, shuffled or in order. The lock
+screen can follow along.
+
+</td>
+</tr>
+</table>
+
+<br>
 
 ## Features
 
-**Browsing**
+**Finding wallpapers**
 
-- Search Wallhaven with your account's own defaults (sorting, purity, ratios,
-  minimum resolution) pulled from your Wallhaven settings.
-- Smart search box: `color:`, `ratio:`, `res:`, `sort:`, `cat:` and `purity:`
-  apply filters directly. Plain words stay plain search terms. Words that might
-  be filters show up as suggestions you can accept.
-- Tag, similar-image and uploader searches appear as pills, not raw IDs.
-- Search by image: drop a picture on the window to find similar wallpapers.
-- Two layouts: a uniform grid, or a justified mosaic that keeps each
-  wallpaper's real shape.
-- SFW, Sketchy and NSFW are color-coded on every card. NSFW (or Sketchy too)
-  can hide behind a pixel mosaic until hovered.
+- Search with your Wallhaven account's own defaults, pulled from your settings.
+- A smart search box: `color:`, `ratio:`, `res:`, `sort:`, `cat:` and `purity:`
+  apply filters directly, plain words stay plain, and words that might be
+  filters are offered as suggestions instead of guessed.
+- Tag, similar-image and uploader searches show as pills, never raw IDs.
+- Drop any picture on the window to search by image.
+- A uniform grid, or a justified mosaic that keeps each wallpaper's real shape.
+- SFW, Sketchy and NSFW color-coded on every card; NSFW (or Sketchy too) can
+  hide behind a pixel mosaic until hovered.
 
-**Loading**
+**Putting them up**
 
-- Thumbnails stream in with a placeholder built from the image's own palette.
-- Full-size downloads use parallel HTTP range requests, and the preview
-  develops band by band as chunks arrive.
-- Cursor-trajectory prefetching ("precog") starts the download for the card
-  you are about to click.
-
-**Setting wallpapers**
-
-- Per-monitor desktop and lock screen, each placed independently.
-- Span one image across all monitors, with a framing editor for zoom and pan
-  that accounts for real monitor sizes and positions.
-- Slot machine: spin for a fresh, color-matched set across all screens, or
-  harmonize the other monitors to the one you picked.
-- Auto-rotate on a timer, from search results or your downloaded library,
-  optionally matched to the time of day.
+- Per-monitor desktop and lock screen, placed independently or together.
+- Span one image across every screen, with a framing editor that knows your
+  monitors' real sizes and positions.
+- Spin for a random set, or Match the other screens to the one you picked.
+- Hold Space to preview a wallpaper on your real desktop; let go to revert.
 - History of everything you have set, ready to restore.
-- Hold Space to preview a wallpaper on your real desktop, and let go to revert.
 
-**Galleries**
+**Absurd engineering**
 
-- Collect wallpapers into galleries: right-click a card, use the bookmark
-  button, or drag a card onto a gallery. While you drag, your galleries rise
-  from the bottom of the sidebar as drop targets.
-- Smart galleries: save any search, and the gallery keeps its top results,
-  refreshing itself daily.
-- Import your Wallhaven collections as galleries.
-- Keep a gallery offline: its full-size originals are downloaded in the
-  background so rotation never waits on the network.
-- Rotate from a gallery, shuffled (matched to the time of day) or in order.
+- Full-size originals download over parallel HTTP range requests, and the
+  preview develops band by band as the chunks land.
+- "Precog" reads your cursor's trajectory and prefetches the card you are
+  heading for.
+- Every palette is k-means'd, and every text color is pushed until it clears
+  contrast against whatever the theme just became.
+- Desktop backends declare their abilities through traits checked at compile
+  time; a backend cannot claim a lock screen it does not implement.
+- The cache is an LRU with a size limit, and anything on screen is never
+  evicted.
 
-**Interface**
-
-- The whole UI takes on the selected wallpaper's colors, with text contrast
-  enforced so it stays readable on any image.
-- Lightbox with a zoom explorer, minimap, loupe, filmstrip and a desktop
-  mock-up showing the image on your monitor layout.
+<br>
 
 ## Platform support
 
@@ -72,19 +154,33 @@ wallpaper.
 | macOS | Per monitor | Follows the desktop | Changes the current Space only; macOS has no lock screen API |
 | Other Linux desktops | Browse and download only | | Backends welcome |
 
-Windows and macOS support is new and built without access to those
-machines. It compiles and passes tests in CI on both, but reports from real
-use are very welcome.
-
-Each desktop is a backend that declares what it can do through trait impls,
-checked at compile time, so adding one is mostly a matter of implementing a
-few small traits. See [CONTRIBUTING.md](CONTRIBUTING.md).
+Windows and macOS support compiles and passes tests in CI on both, but was
+built without access to those machines; reports from real use are very
+welcome. Adding a desktop is mostly a matter of implementing a few small
+traits, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 On Plasma, the per-monitor lock screen uses a small wallpaper plugin
 (`dev.muralist.perscreen`), installed to `~/.local/share/plasma/wallpapers`
 the first time you set a lock screen.
 
-## Requirements
+## Install
+
+```sh
+cargo install muralist
+```
+
+Or from source:
+
+```sh
+git clone https://github.com/Toyz/muralist
+cd muralist
+cargo run --release
+```
+
+<details>
+<summary><b>Requirements</b></summary>
+
+<br>
 
 - Rust 1.85 or newer (edition 2024).
 - Windows and macOS need nothing beyond the Rust toolchain (and Xcode's
@@ -101,24 +197,12 @@ the first time you set a lock screen.
   On Arch these come with `vulkan-icd-loader`, `wayland`, `libxkbcommon-x11`
   and `fontconfig`.
 
-## Install
-
-```sh
-cargo install muralist
-```
-
-Or from source:
-
-```sh
-git clone https://github.com/Toyz/muralist
-cd muralist
-cargo run --release
-```
+</details>
 
 ## Configuration
 
-Settings live in `~/.config/muralist/config.toml` and are editable from the
-settings dialog. Most people only need an API key:
+Settings live in `~/.config/muralist/config.toml` and are all editable from
+the settings window. Most people only need an API key:
 
 ```toml
 api_key = "your-wallhaven-api-key"
@@ -126,33 +210,48 @@ download_dir = "/home/you/Pictures/muralist"
 ```
 
 The key comes from your [Wallhaven account settings](https://wallhaven.cc/settings/account).
-Without one, muralist still works but Wallhaven only returns SFW results and
-ignores your account defaults. You can also set `WALLHAVEN_API_KEY` in the
-environment, which takes precedence over the file.
+Without one, muralist still works, but Wallhaven only returns SFW results and
+ignores your account defaults. `WALLHAVEN_API_KEY` in the environment takes
+precedence over the file.
 
-Other files:
+<details>
+<summary><b>Other files and variables</b></summary>
+
+<br>
 
 - `~/.config/muralist/state.json`: what is on each monitor, plus history.
 - `~/.config/muralist/galleries.json`: your galleries.
-- `~/.cache/muralist/`: thumbnails and sliced span images. Safe to clear from
-  the settings dialog.
+- `~/.cache/muralist/`: thumbnails, cached originals and span slices, kept
+  under a size limit you choose in Settings.
+- `MURALIST_BACKEND` forces a backend by ID (`plasma`, `windows`, `macos`).
+  Any other value disables wallpaper setting, which is handy when testing the
+  UI.
 
-`MURALIST_BACKEND` forces a backend by ID (`plasma`, `windows`, `macos`). Any other value
-disables wallpaper setting, which is useful when testing the UI.
+</details>
 
 ## Keyboard
 
-| Key              | Where    | Action                         |
-|------------------|----------|--------------------------------|
-| Space (hold)     | Anywhere | Preview on the real desktop    |
-| Left / Right, h / l | Lightbox | Previous / next             |
-| z                | Lightbox | Zoom explorer                  |
-| 0 / 1            | Zoom     | Fit / actual pixels            |
-| + / -            | Zoom     | Zoom in / out                  |
-| m                | Lightbox | Desktop mock-up                |
-| i                | Lightbox | Info panel                     |
-| ?                | Lightbox | Show all shortcuts             |
-| Esc              | Lightbox | Close                          |
+| Key | Where | Action |
+|---|---|---|
+| Space (hold) | Anywhere | Preview on the real desktop |
+| Right-click | A card | Lift it into the menu |
+| S / P / G | Lifted card | Set, span, save to gallery |
+| F / D / Enter | Lifted card | Find similar, save to library, open |
+| 1 to 9 | Lifted card | Set on that screen |
+| Left / Right, h / l | Lightbox | Previous / next |
+| z | Lightbox | Zoom explorer |
+| 0 / 1 | Zoom | Fit / actual pixels |
+| + / - | Zoom | Zoom in / out |
+| m | Lightbox | Desktop mock-up |
+| i | Lightbox | Info panel |
+| ? | Lightbox | Show all shortcuts |
+| Esc | Anywhere | Close what's open |
+
+## Contributing
+
+Bug reports, design ideas and new desktop backends are all welcome. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for how the code is laid out and how
+backends plug in.
 
 ## License
 
@@ -168,5 +267,5 @@ submitted for inclusion in this project by you, as defined in the Apache-2.0
 license, shall be dual licensed as above, without any additional terms or
 conditions.
 
-Wallpapers belong to their creators. muralist is not affiliated with
-Wallhaven.
+<sub>Wallpapers belong to their creators. muralist is not affiliated with
+Wallhaven. Screenshots show SFW results only.</sub>
