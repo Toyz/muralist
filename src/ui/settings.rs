@@ -25,6 +25,7 @@ pub(super) enum Section {
     Appearance,
     Rotation,
     Downloads,
+    Desktop,
     Lock,
     Data,
 }
@@ -36,6 +37,7 @@ impl Section {
             Section::Appearance => "Appearance",
             Section::Rotation => "Auto-rotate",
             Section::Downloads => "Downloads",
+            Section::Desktop => "Desktop",
             Section::Lock => "Lock screen",
             Section::Data => "Data",
         }
@@ -47,6 +49,7 @@ impl Section {
             Section::Appearance => "palette",
             Section::Rotation => "shuffle",
             Section::Downloads => "folder",
+            Section::Desktop => "monitor",
             Section::Lock => "lock",
             Section::Data => "database",
         }
@@ -58,6 +61,7 @@ impl Section {
             Section::Appearance => "How muralist looks and what it hides.",
             Section::Rotation => "Fresh wallpapers on a timer while muralist is open.",
             Section::Downloads => "Where full-size wallpapers are saved.",
+            Section::Desktop => "How muralist reaches your screens.",
             Section::Lock => "How the lock screen is set.",
             Section::Data => "Filters, prefetching and the cache.",
         }
@@ -253,10 +257,18 @@ impl Muralist {
 
     fn settings_sections(&self) -> Vec<Section> {
         let per_monitor_lock = self.backend.lock().is_some_and(|w| w.reach() == Reach::PerMonitor);
-        [Section::Account, Section::Appearance, Section::Rotation, Section::Downloads, Section::Lock, Section::Data]
-            .into_iter()
-            .filter(|s| *s != Section::Lock || per_monitor_lock)
-            .collect()
+        [
+            Section::Account,
+            Section::Appearance,
+            Section::Rotation,
+            Section::Downloads,
+            Section::Desktop,
+            Section::Lock,
+            Section::Data,
+        ]
+        .into_iter()
+        .filter(|s| *s != Section::Lock || per_monitor_lock)
+        .collect()
     }
 
     pub(super) fn render_settings(&mut self, cx: &mut Context<Self>) -> AnyElement {
@@ -312,6 +324,7 @@ impl Muralist {
             Section::Appearance => self.settings_appearance(cx),
             Section::Rotation => self.settings_rotation(cx),
             Section::Downloads => self.settings_downloads(cx),
+            Section::Desktop => self.settings_desktop(cx),
             Section::Lock => self.settings_lock(cx),
             Section::Data => self.settings_data(cx),
         };
@@ -760,6 +773,78 @@ impl Muralist {
                                 cx.notify();
                             },
                         )),
+                        p,
+                    )
+                    .into_any_element(),
+                ],
+                p,
+            )
+            .into_any_element(),
+        ]
+    }
+
+    /// Puts what's set back up, running the desktop's scripts again: after a
+    /// Plasma restart, a wallpaper plugin change, or a screen that didn't
+    /// take its picture.
+    fn reapply(&mut self, cx: &mut Context<Self>) {
+        self.desktop = self.applied.desktop.clone();
+        self.lock = self.applied.lock.clone();
+        let mut targets = Vec::new();
+        if !self.desktop.is_empty() {
+            targets.push(super::Target::Desktop);
+        }
+        if !self.lock.is_empty() && self.backend.lock().is_some() {
+            targets.push(super::Target::Lock);
+        }
+        if targets.is_empty() {
+            self.set_status("Nothing set yet to reapply", true, cx);
+            return;
+        }
+        self.apply(targets, cx);
+    }
+
+    fn settings_desktop(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let p = pal();
+        let mut screens: Vec<String> = self
+            .monitors
+            .iter()
+            .map(|m| format!("{} {}x{}{}", m.name, m.px_width, m.px_height, if m.primary { " (primary)" } else { "" }))
+            .collect();
+        if screens.is_empty() {
+            screens.push("none found".into());
+        }
+        let busy = self.busy > 0;
+        vec![
+            group(
+                vec![
+                    row(
+                        "Connected to",
+                        self.backend.name().to_owned(),
+                        icon("circle-check").size_4().text_color(if self.backend.is_supported() {
+                            p.ok
+                        } else {
+                            p.dim
+                        }),
+                        p,
+                    )
+                    .into_any_element(),
+                    row("Screens", screens.join("  ·  "), div(), p).into_any_element(),
+                ],
+                p,
+            )
+            .into_any_element(),
+            group(
+                vec![
+                    row(
+                        "Reapply",
+                        "Put your current wallpapers back up on the desktop and lock screen, running the scripts \
+                         again: after Plasma restarts, a wallpaper plugin changes, or a screen didn't take its \
+                         picture.",
+                        kit::Btn::new("set-reapply")
+                            .label("Reapply")
+                            .icon("refresh-cw")
+                            .loading(busy)
+                            .on_click(cx.listener(|this, _, _, cx| this.reapply(cx))),
                         p,
                     )
                     .into_any_element(),
