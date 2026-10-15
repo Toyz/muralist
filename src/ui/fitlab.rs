@@ -10,7 +10,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::glass::{delayed, ease_out_cubic};
-use super::{Muralist, boxed, develop, glass, icon, pal, purity_color, section, with_alpha};
+use super::{Muralist, boxed, glass, icon, pal, purity_color, section, with_alpha};
 use crate::wallhaven::Wallpaper;
 
 /// Which way the lab looks at the fit.
@@ -25,7 +25,6 @@ pub(super) enum FitMode {
 /// (badly upscaled), on a log scale so 1x sits in the middle.
 const GAUGE_MIN: f32 = 0.25;
 const GAUGE_MAX: f32 = 3.;
-const DIAGRAM_MAX_H: f32 = 170.;
 
 /// How good a scale factor looks: 1 when every screen pixel has a source
 /// pixel (or more), falling away as the image is stretched.
@@ -174,83 +173,97 @@ impl Muralist {
         let full_w = self.details_w;
         let diagram: AnyElement = match mode {
             FitMode::Span => {
-                // The whole picture, with the desk laid over it where a span
-                // would put it.
-                let dk = (full_w / iw).min(DIAGRAM_MAX_H / ih);
-                let (dw, dh) = (iw * dk, ih * dk);
+                // Desktop units per image pixel when one image covers the desk,
+                // and where the image sits relative to it (centred, overhanging).
                 let s_logical = (bw / iw).max(bh / ih);
-                let (win_w, win_h) = (bw / s_logical * dk, bh / s_logical * dk);
-                let (win_x, win_y) = ((dw - win_w) / 2., (dh - win_h) / 2.);
-                let screens: Vec<AnyElement> = monitors
-                    .iter()
-                    .enumerate()
-                    .map(|(i, m)| {
-                        let x = win_x + (m.x - min_x) as f32 / s_logical * dk;
-                        let y = win_y + (m.y - min_y) as f32 / s_logical * dk;
-                        let (sw, sh) = (m.width as f32 / s_logical * dk, m.height as f32 / s_logical * dk);
-                        let tint = self.sharpness_color(span[i]);
-                        div()
-                            .absolute()
-                            .left(px(x))
-                            .w(px(sw))
-                            .h(px(sh))
-                            .overflow_hidden()
-                            .when_some(thumb.clone(), |d, t| {
-                                d.child(boxed(img(t), dw, dh).absolute().left(px(-x)).top(px(-y)))
-                            })
-                            .child(div().absolute().inset_0().border_1().border_color(tint))
-                            .child(
+                let (img_w, img_h) = (iw * s_logical, ih * s_logical);
+                let (ox, oy) = ((bw - img_w) / 2., (bh - img_h) / 2.);
+
+                // ---- the source map: what of the picture survives ----
+                // Full width: only a tall portrait picture is held back, so the
+                // map never floats in empty space.
+                let mk = (full_w / iw).min(260. / ih);
+                let (mw, mh) = (iw * mk, ih * mk);
+                let (kw, kh) = (bw / s_logical * mk, bh / s_logical * mk);
+                let (kx, ky) = ((mw - kw) / 2., (mh - kh) / 2.);
+                // Image pixels lost on each side of the kept strip.
+                let (lost_x, lost_y) = (((iw - bw / s_logical) / 2.).max(0.), ((ih - bh / s_logical) / 2.).max(0.));
+                let stripes = |w: f32, h: f32| {
+                    // Red warning stripes over what a span throws away.
+                    let n = ((w + h) / 7.).ceil() as usize;
+                    div().absolute().inset_0().overflow_hidden().bg(with_alpha(p.error, 0.12)).children((0..n).map(
+                        move |i| {
+                            div()
+                                .absolute()
+                                .top_0()
+                                .bottom_0()
+                                .left(px(i as f32 * 7. - h))
+                                .w(px(2.))
+                                .bg(with_alpha(p.error, 0.35))
+                        },
+                    ))
+                };
+                let lost_band = |x: f32, y: f32, w: f32, h: f32, label: String| {
+                    div().absolute().left(px(x)).top(px(y)).w(px(w)).h(px(h)).child(stripes(w, h)).when(
+                        w > 40. && h > 12.,
+                        |d| {
+                            d.child(
                                 div()
                                     .absolute()
-                                    .top_1()
-                                    .left_1()
-                                    .px_1()
-                                    .rounded_sm()
-                                    .bg(hsla(0., 0., 0., 0.7))
+                                    .inset_0()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
                                     .text_size(px(9.))
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(tint)
-                                    .child(format!("{} {:.1}x", m.name, span[i])),
+                                    .text_color(p.error)
+                                    .child(label),
                             )
-                            // Each screen drops into place on the picture.
-                            .with_animation(
-                                SharedString::from(format!("fit-drop-{key}-{i}")),
-                                delayed(150 + i as u64 * 110, 380),
-                                move |d, t| {
-                                    let e = ease_out_cubic(t);
-                                    d.top(px(y - 14. * (1. - e))).opacity(e)
-                                },
-                            )
-                            .into_any_element()
-                    })
-                    .collect();
-                div()
+                        },
+                    )
+                };
+                let map = div()
                     .relative()
-                    .w(px(dw))
-                    .h(px(dh))
+                    .w(px(mw))
+                    .h(px(mh))
                     .rounded_md()
                     .overflow_hidden()
                     .bg(p.bg)
-                    // What a span throws away, dimmed and tinted red.
-                    .when_some(thumb.clone(), |d, t| d.child(boxed(img(t), dw, dh).grayscale(true).opacity(0.3)))
-                    .child(div().absolute().inset_0().bg(with_alpha(p.error, 0.14)))
-                    .children(develop::thirds(hsla(0., 0., 1., 0.08)))
-                    .children(screens)
-                    // The desk's outline, bracketed.
+                    .when_some(thumb.clone(), |d, t| d.child(boxed(img(t), mw, mh).grayscale(true).opacity(0.35)))
+                    // The strip a span keeps, lit.
                     .child(
                         div()
                             .absolute()
-                            .left(px(win_x - 6.))
-                            .top(px(win_y - 6.))
-                            .w(px(win_w + 12.))
-                            .h(px(win_h + 12.))
-                            .children((0..4).map(|i| develop::bracket(i, 0., with_alpha(c, 0.9)))),
+                            .left(px(kx))
+                            .top(px(ky))
+                            .w(px(kw))
+                            .h(px(kh))
+                            .overflow_hidden()
+                            .when_some(thumb.clone(), |d, t| {
+                                d.child(boxed(img(t), mw, mh).absolute().left(px(-kx)).top(px(-ky)))
+                            })
+                            .child(div().absolute().inset_0().border_1().border_color(with_alpha(c, 0.9))),
                     )
-                    .child(develop::beam(
-                        SharedString::from(format!("fit-beam-{key}")),
-                        develop::Beam { color: c, band: 30., glow: 0.16, line: 0.6, ms: 2600 },
-                        dh,
-                    ))
+                    .when(lost_y >= 1., |d| {
+                        let label = format!("{:.0} px cut", lost_y);
+                        d.child(lost_band(0., 0., mw, ky, label.clone())).child(lost_band(
+                            0.,
+                            ky + kh,
+                            mw,
+                            mh - ky - kh,
+                            label,
+                        ))
+                    })
+                    .when(lost_x >= 1., |d| {
+                        let label = format!("{:.0} px", lost_x);
+                        d.child(lost_band(0., 0., kx, mh, label.clone())).child(lost_band(
+                            kx + kw,
+                            0.,
+                            mw - kx - kw,
+                            mh,
+                            label,
+                        ))
+                    })
                     .when(cropped > 0.005, |d| {
                         d.child(
                             div()
@@ -259,15 +272,130 @@ impl Muralist {
                                 .right_1()
                                 .px_1p5()
                                 .rounded_sm()
-                                .bg(hsla(0., 0., 0., 0.75))
+                                .bg(hsla(0., 0., 0., 0.8))
                                 .border_1()
                                 .border_color(with_alpha(p.error, 0.6))
                                 .text_size(px(9.))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(p.error)
-                                .child(format!("-{:.0}% CROPPED", cropped * 100.)),
+                                .child(format!("-{:.0}% OF THE PICTURE", cropped * 100.)),
                         )
+                    });
+
+                // ---- the desk: each screen showing its own slice ----
+                const STAND: f32 = 12.;
+                let ds = (full_w / bw).min(88. / bh);
+                let (desk_w, desk_h) = (bw * ds, bh * ds);
+                let bezel = 3.;
+                let screens: Vec<AnyElement> = monitors
+                    .iter()
+                    .enumerate()
+                    .map(|(i, m)| {
+                        let (mx, my) = ((m.x - min_x) as f32, (m.y - min_y) as f32);
+                        let (sx, sy) = (mx * ds, my * ds);
+                        let (sw, sh) = (m.width as f32 * ds - 4., m.height as f32 * ds - 4.);
+                        let (iw2, ih2) = (sw - bezel * 2., sh - bezel * 2.);
+                        let tint = self.sharpness_color(span[i]);
+                        // The picture as a span lays it over the whole desk,
+                        // seen through this screen.
+                        let (pl, pt) = ((ox - mx) * ds - bezel, (oy - my) * ds - bezel);
+                        let slice = thumb.clone().map(|t| {
+                            div()
+                                .absolute()
+                                .top(px(bezel))
+                                .left(px(bezel))
+                                .h(px(ih2))
+                                .overflow_hidden()
+                                .child(
+                                    div().w(px(iw2)).h(px(ih2)).relative().overflow_hidden().child(
+                                        boxed(img(t), img_w * ds, img_h * ds).absolute().left(px(pl)).top(px(pt)),
+                                    ),
+                                )
+                                .child(div().absolute().top_0().bottom_0().right_0().w(px(2.)).bg(with_alpha(c, 0.9)))
+                                .with_animation(
+                                    SharedString::from(format!("fit-slice-{key}-{i}")),
+                                    delayed(150 + i as u64 * 140, 420),
+                                    move |d, t| d.w(px(iw2 * ease_out_cubic(t))),
+                                )
+                        });
+                        div()
+                            .absolute()
+                            .left(px(sx + 2.))
+                            .top(px(sy + 2.))
+                            .w(px(sw))
+                            .h(px(sh + STAND))
+                            .child(
+                                div()
+                                    .relative()
+                                    .w(px(sw))
+                                    .h(px(sh))
+                                    .rounded_md()
+                                    .bg(hsla(0., 0., 0.04, 1.))
+                                    .children(slice)
+                                    .child(div().absolute().inset_0().rounded_md().border_1().border_color(tint)),
+                            )
+                            .child(
+                                div()
+                                    .absolute()
+                                    .top(px(sh))
+                                    .left(px(sw / 2. - 2.))
+                                    .w(px(4.))
+                                    .h(px(STAND - 4.))
+                                    .bg(with_alpha(tint, 0.6)),
+                            )
+                            .child(
+                                div()
+                                    .absolute()
+                                    .top(px(sh + STAND - 4.))
+                                    .left(px(sw / 2. - 14.))
+                                    .w(px(28.))
+                                    .h(px(3.))
+                                    .rounded_full()
+                                    .bg(with_alpha(tint, 0.6)),
+                            )
+                            .into_any_element()
                     })
+                    .collect();
+                // Under each stand: its name, scale and how it'll look.
+                let captions: Vec<AnyElement> = monitors
+                    .iter()
+                    .enumerate()
+                    .map(|(i, m)| {
+                        let sx = (m.x - min_x) as f32 * ds;
+                        let sw = m.width as f32 * ds;
+                        let tint = self.sharpness_color(span[i]);
+                        v_flex()
+                            .absolute()
+                            .left(px(sx))
+                            .w(px(sw))
+                            .items_center()
+                            .text_size(px(9.))
+                            .child(div().font_weight(FontWeight::SEMIBOLD).child(m.name.clone()))
+                            .child(div().text_color(tint).font_weight(FontWeight::SEMIBOLD).child(format!(
+                                "{:.1}x  {}",
+                                span[i],
+                                scale_word(span[i])
+                            )))
+                            .into_any_element()
+                    })
+                    .collect();
+                let desk = v_flex()
+                    .items_center()
+                    .gap_1()
+                    .child(div().relative().w(px(desk_w)).h(px(desk_h + STAND)).children(screens))
+                    .child(div().w(px(desk_w)).h(px(3.)).rounded_full().bg(with_alpha(c, 0.35)))
+                    .child(div().relative().w(px(desk_w)).h(px(24.)).children(captions));
+
+                let label = |text: &'static str| {
+                    div().text_size(px(9.)).font_weight(FontWeight::SEMIBOLD).text_color(p.dim).child(text)
+                };
+                v_flex()
+                    .w_full()
+                    .gap_2()
+                    .child(label("THE PICTURE  ·  WHAT A SPAN KEEPS"))
+                    .child(h_flex().justify_center().child(map))
+                    .child(label("ON YOUR DESK"))
+                    .child(desk)
                     .into_any_element()
             }
             FitMode::Fill => {
