@@ -21,6 +21,8 @@ fn main() {
 
     gpui_kit::application().with_assets(gpui_kit::assets::Assets).run(move |cx| {
         gpui_kit::init(cx);
+        // One window: closing it quits, macOS included.
+        cx.set_quit_mode(QuitMode::LastWindowClosed);
         Theme::change(ThemeMode::Dark, None, cx);
         ui::apply_theme(cx);
 
@@ -30,7 +32,8 @@ fn main() {
             titlebar: Some(TitlebarOptions {
                 title: Some("muralist".into()),
                 appears_transparent: true,
-                ..Default::default()
+                // Centered in the sidebar's title bar.
+                traffic_light_position: Some(point(px(18.), px(21.))),
             }),
             window_decorations: Some(WindowDecorations::Client),
             // Opaque: the compositor then ignores alpha inside the frame, so

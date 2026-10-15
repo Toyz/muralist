@@ -53,10 +53,16 @@ wallpaper.
 
 ## Platform support
 
-| Desktop     | Desktop wallpaper | Lock screen   | Per monitor |
-|-------------|-------------------|---------------|-------------|
-| KDE Plasma 6 (Wayland or X11) | yes | yes | yes |
-| Others      | browse and download only | | |
+| Platform | Desktop | Lock screen | Notes |
+|---|---|---|---|
+| KDE Plasma 6 (Wayland or X11) | Per monitor | Per monitor | |
+| Windows 10 and 11 | Per monitor | One image | Windows Spotlight or group policy can override the lock screen |
+| macOS | Per monitor | Follows the desktop | Changes the current Space only; macOS has no lock screen API |
+| Other Linux desktops | Browse and download only | | Backends welcome |
+
+Windows and macOS support is new and built without access to those
+machines. It compiles and passes tests in CI on both, but reports from real
+use are very welcome.
 
 Each desktop is a backend that declares what it can do through trait impls,
 checked at compile time, so adding one is mostly a matter of implementing a
@@ -69,9 +75,11 @@ the first time you set a lock screen.
 ## Requirements
 
 - Rust 1.85 or newer (edition 2024).
+- Windows and macOS need nothing beyond the Rust toolchain (and Xcode's
+  command line tools on macOS).
 - On Plasma: `plasmashell`, `kscreen-doctor`, `kwriteconfig6` and
   `kreadconfig6`, which ship with Plasma 6.
-- GPUI's native dependencies. On Debian and Ubuntu:
+- On Linux, GPUI's native dependencies. On Debian and Ubuntu:
 
   ```sh
   sudo apt install libxkbcommon-x11-dev libwayland-dev libvulkan-dev \
@@ -116,7 +124,7 @@ Other files:
 - `~/.cache/muralist/`: thumbnails and sliced span images. Safe to clear from
   the settings dialog.
 
-`MURALIST_BACKEND` forces a backend by ID (`plasma`). Any other value
+`MURALIST_BACKEND` forces a backend by ID (`plasma`, `windows`, `macos`). Any other value
 disables wallpaper setting, which is useful when testing the UI.
 
 ## Keyboard

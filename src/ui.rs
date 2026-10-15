@@ -343,10 +343,12 @@ fn switch(on: bool, p: Pal) -> Div {
 }
 
 /// A bar of the custom window frame: drag to move, double-click to maximize,
-/// right-click for the compositor's window menu.
+/// right-click for the compositor's window menu. Windows does all of that
+/// natively once the bar is marked as a drag area.
 fn title_region(d: Div, p: Pal) -> Div {
     d.h(px(TITLE_H))
         .flex_none()
+        .window_control_area(WindowControlArea::Drag)
         .border_b_1()
         .border_color(p.border)
         .on_mouse_down(MouseButton::Left, |ev: &MouseDownEvent, window, _| {
@@ -359,16 +361,22 @@ fn title_region(d: Div, p: Pal) -> Div {
         .on_mouse_down(MouseButton::Right, |ev: &MouseDownEvent, window, _| window.show_window_menu(ev.position))
 }
 
-/// Keeps clicks on interactive children from starting a window drag.
+/// Keeps clicks on interactive children from starting a window drag. The
+/// occlusion matters on Windows, where the drag area otherwise wins the hit
+/// test over everything inside it.
 fn no_drag<E: InteractiveElement>(e: E) -> E {
-    e.on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+    e.occlude().on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
 }
 
+/// macOS draws its own window buttons at the top left.
+const NATIVE_WINDOW_BUTTONS: bool = cfg!(target_os = "macos");
+
 fn window_controls(window: &Window, p: Pal) -> impl IntoElement {
-    let ctrl = |id: &'static str, name: &str, danger: bool| {
+    let ctrl = |id: &'static str, name: &str, danger: bool, area: WindowControlArea| {
         no_drag(
             div()
                 .id(id)
+                .window_control_area(area)
                 .size(px(28.))
                 .flex()
                 .items_center()
@@ -387,9 +395,12 @@ fn window_controls(window: &Window, p: Pal) -> impl IntoElement {
     let max_icon = if window.is_maximized() { "window-restore" } else { "window-maximize" };
     h_flex()
         .gap_1()
-        .child(ctrl("win-min", "window-minimize", false).on_click(|_, window, _| window.minimize_window()))
-        .child(ctrl("win-max", max_icon, false).on_click(|_, window, _| window.zoom_window()))
-        .child(ctrl("win-close", "window-close", true).on_click(|_, _, cx| cx.quit()))
+        .child(
+            ctrl("win-min", "window-minimize", false, WindowControlArea::Min)
+                .on_click(|_, window, _| window.minimize_window()),
+        )
+        .child(ctrl("win-max", max_icon, false, WindowControlArea::Max).on_click(|_, window, _| window.zoom_window()))
+        .child(ctrl("win-close", "window-close", true, WindowControlArea::Close).on_click(|_, _, cx| cx.quit()))
 }
 
 // ---- loading treatment --------------------------------------------------------
@@ -3704,7 +3715,7 @@ impl Muralist {
                     .pr_3()
                     .gap_2()
                     .child(div().flex_1().min_w_0().truncate().text_xs().text_color(p.dim).child(title))
-                    .child(window_controls(window, p)),
+                    .when(!NATIVE_WINDOW_BUTTONS, |d| d.child(window_controls(window, p))),
             )
             .child(
                 div()

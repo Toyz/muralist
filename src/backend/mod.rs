@@ -35,8 +35,12 @@ use anyhow::{Context as _, Result, bail};
 use crate::config::LockMode;
 use crate::monitors::Monitor;
 
+#[cfg(target_os = "macos")]
+mod mac;
 #[cfg(target_os = "linux")]
 mod plasma;
+#[cfg(windows)]
+mod win;
 
 /// Image per output name.
 pub type Images = BTreeMap<String, PathBuf>;
@@ -219,6 +223,10 @@ macro_rules! backends {
 backends! {
     #[cfg(target_os = "linux")]
     Plasma(plasma::Plasma),
+    #[cfg(windows)]
+    Windows(win::Windows),
+    #[cfg(target_os = "macos")]
+    MacOs(mac::MacOs),
     #[cfg(test)]
     Fake(tests::Fake),
 }

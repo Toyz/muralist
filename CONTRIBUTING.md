@@ -100,10 +100,14 @@ Things the compiler checks for you:
 A surface with only `SetOne` still works with per-monitor assignments: the
 primary monitor's image is used everywhere.
 
-`src/backend/plasma/` is the reference implementation, and the `Fake` backend
+`src/backend/plasma/` is the reference implementation; `win.rs` and
+`mac.rs` are compact single-file examples, and the `Fake` backend
 in the tests at the bottom of `src/backend/mod.rs` is a small example.
 GNOME, Sway/wlroots (`swaybg`, `swww`) and Hyprland (`hyprpaper`) would all be
 welcome.
+
+CI builds and tests on Linux, Windows and macOS, so a backend for a platform
+you can't run locally still gets compiled and linted on every push.
 
 ## Style
 
