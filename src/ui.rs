@@ -139,6 +139,15 @@ fn mix(a: Hsla, b: Hsla, t: f32) -> Hsla {
     Rgba { r: a.r + (b.r - a.r) * t, g: a.g + (b.g - a.g) * t, b: a.b + (b.b - a.b) * t, a: 1. }.into()
 }
 
+fn lerp(a: f32, b: f32, t: f32) -> f32 {
+    a + (b - a) * t
+}
+
+/// Bytes as mebibytes, for the "2.8 MB" readouts.
+fn mib(bytes: u64) -> f64 {
+    bytes as f64 / 1_048_576.
+}
+
 fn hex(c: u32) -> Hsla {
     rgb(c).into()
 }
@@ -3781,7 +3790,7 @@ impl Muralist {
         // The box eases between shapes instead of snapping, from wherever
         // it is right now if it was already moving.
         const RESHAPE_MS: f32 = 280.;
-        let ease = |t: f32| 1. - (1. - t.clamp(0., 1.)).powi(3);
+        let ease = glass::ease_out_cubic;
         let (from, to, since, run) = self.preview_h_anim;
         if (to - target_h).abs() > 0.5 {
             let now_h = from + (to - from) * ease(since.elapsed().as_secs_f32() * 1000. / RESHAPE_MS);
@@ -3809,11 +3818,9 @@ impl Muralist {
             self.develop_watch = Some(key.clone());
         }
         let lock = match (&phase, &remote) {
-            (FullPhase::Done, Some(w)) if self.develop_watch.as_deref() == Some(key.as_str()) => develop::lock(
-                &key,
-                glow,
-                format!("LOCKED  {}  ·  {:.1} MB", w.resolution, w.file_size as f64 / 1_048_576.),
-            ),
+            (FullPhase::Done, Some(w)) if self.develop_watch.as_deref() == Some(key.as_str()) => {
+                develop::lock(&key, glow, format!("LOCKED  {}  ·  {:.1} MB", w.resolution, mib(w.file_size)))
+            }
             _ => Vec::new(),
         };
 
@@ -4008,7 +4015,8 @@ impl Muralist {
                 .into_any_element(),
             Item::Remote(w) => {
                 let pc = purity_color(&w.purity);
-                let head = v_flex()
+
+                v_flex()
                     .gap_3()
                     .child(preview)
                     .child(
@@ -4039,8 +4047,7 @@ impl Muralist {
                             )
                             .child(save),
                     )
-                    .into_any_element();
-                head
+                    .into_any_element()
             }
         }
     }

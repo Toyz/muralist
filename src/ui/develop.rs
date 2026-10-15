@@ -31,7 +31,48 @@ pub(super) fn bracket(corner: usize, inset: f32, c: Hsla) -> Div {
 }
 
 fn mb(bytes: u64) -> String {
-    format!("{:.1}", bytes as f64 / 1_048_576.)
+    format!("{:.1}", super::mib(bytes))
+}
+
+/// Rule-of-thirds guides across whatever they're laid over.
+pub(super) fn thirds(color: Hsla) -> [AnyElement; 4] {
+    let line = |i: u8, vertical: bool| {
+        let at = relative(f32::from(i) / 3.);
+        let d = div().absolute().bg(color);
+        if vertical { d.top_0().bottom_0().left(at).w(px(1.)) } else { d.left_0().right_0().top(at).h(px(1.)) }
+            .into_any_element()
+    };
+    [line(1, true), line(2, true), line(1, false), line(2, false)]
+}
+
+/// How a scan beam looks: its color, the height of its soft band, the
+/// band's and the leading line's strength, and one sweep's duration.
+pub(super) struct Beam {
+    pub color: Hsla,
+    pub band: f32,
+    pub glow: f32,
+    pub line: f32,
+    pub ms: u64,
+}
+
+/// A band of light with a bright leading line, sweeping down something
+/// `travel` tall over and over.
+pub(super) fn beam(id: SharedString, b: Beam, travel: f32) -> AnimationElement<Div> {
+    let Beam { color, band, glow, line, ms } = b;
+    div()
+        .absolute()
+        .left_0()
+        .right_0()
+        .h(px(band))
+        .child(div().absolute().inset_0().bg(linear_gradient(
+            180.,
+            linear_color_stop(with_alpha(color, 0.), 0.),
+            linear_color_stop(with_alpha(color, glow), 1.),
+        )))
+        .child(div().absolute().left_0().right_0().bottom_0().h(px(1.5)).bg(with_alpha(color, line)))
+        .with_animation(id, Animation::new(Duration::from_millis(ms)).repeat().with_easing(ease_in_out), move |d, t| {
+            d.top(px(-band + t * (travel + band)))
+        })
 }
 
 /// Layers over a preview `h` tall whose original is still downloading.
@@ -40,34 +81,14 @@ pub(super) fn hud(key: &str, bands: Bands, colors: &[Hsla], c: Hsla, h: f32) -> 
     let f = fraction.unwrap_or(0.);
     let mut layers = Vec::new();
 
-    // Rule-of-thirds guides.
-    let guide = hsla(0., 0., 1., 0.1);
-    for i in 1..3 {
-        let at = relative(i as f32 / 3.);
-        layers.push(div().absolute().top_0().bottom_0().left(at).w(px(1.)).bg(guide).into_any_element());
-        layers.push(div().absolute().left_0().right_0().top(at).h(px(1.)).bg(guide).into_any_element());
-    }
-
-    // The beam, sweeping down over and over.
-    const BAND: f32 = 46.;
+    layers.extend(thirds(hsla(0., 0., 1., 0.1)));
     layers.push(
-        div()
-            .absolute()
-            .left_0()
-            .right_0()
-            .h(px(BAND))
-            .child(div().absolute().inset_0().bg(linear_gradient(
-                180.,
-                linear_color_stop(with_alpha(c, 0.), 0.),
-                linear_color_stop(with_alpha(c, 0.28), 1.),
-            )))
-            .child(div().absolute().left_0().right_0().bottom_0().h(px(1.5)).bg(with_alpha(c, 0.9)))
-            .with_animation(
-                SharedString::from(format!("dev-beam-{key}")),
-                Animation::new(Duration::from_millis(1300)).repeat().with_easing(ease_in_out),
-                move |d, t| d.top(px(-BAND + t * (h + BAND))),
-            )
-            .into_any_element(),
+        beam(
+            SharedString::from(format!("dev-beam-{key}")),
+            Beam { color: c, band: 46., glow: 0.28, line: 0.9, ms: 1300 },
+            h,
+        )
+        .into_any_element(),
     );
 
     // Brackets hunting for focus.

@@ -419,7 +419,7 @@ impl Muralist {
             .top_0()
             .left_0()
             .size_full()
-            .bg(hex_black())
+            .bg(black())
             .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| this.lightbox_key(ev, window, cx)))
             .on_modifiers_changed(cx.listener(|this, ev: &ModifiersChangedEvent, _, cx| {
                 if this.lb_loupe != ev.modifiers.shift {
@@ -516,7 +516,7 @@ impl Muralist {
                 .border_2()
                 .border_color(hsla(0., 0., 1., 0.85))
                 .shadow_lg()
-                .bg(hex_black())
+                .bg(black())
                 .child(
                     img(src)
                         .absolute()
@@ -565,10 +565,7 @@ impl Muralist {
         sh: f32,
         key: &str,
     ) -> AnyElement {
-        let min_x = self.monitors.iter().map(|m| m.x).min().unwrap_or(0);
-        let min_y = self.monitors.iter().map(|m| m.y).min().unwrap_or(0);
-        let max_x = self.monitors.iter().map(|m| m.x + m.width as i32).max().unwrap_or(1);
-        let max_y = self.monitors.iter().map(|m| m.y + m.height as i32).max().unwrap_or(1);
+        let (min_x, min_y, max_x, max_y) = crate::monitors::extent(&self.monitors);
         let (bw, bh) = ((max_x - min_x) as f32, (max_y - min_y) as f32);
         // Leave room for stands under the screens.
         let k = (sw / bw).min((sh - 40.) / bh);
@@ -595,7 +592,7 @@ impl Muralist {
                     .w(px(w - bezel * 2.))
                     .h(px(h - bezel * 2.))
                     .overflow_hidden()
-                    .bg(hex_black())
+                    .bg(black())
                     .when_some(src.clone(), |d, path| {
                         if span {
                             // One picture across all screens.
@@ -661,7 +658,7 @@ impl Muralist {
                             ((t * (0.38 + i as f32 * 0.09) - i as f32 * 0.09) / 0.38).clamp(0., 1.)
                         }),
                         move |d, t| {
-                            let e = 1. - (1. - t).powi(3);
+                            let e = super::glass::ease_out_cubic(t);
                             d.top(px(top + 30. * (1. - e))).opacity(e)
                         },
                     )
@@ -1182,8 +1179,4 @@ impl Muralist {
             )
             .into_any_element()
     }
-}
-
-fn hex_black() -> Hsla {
-    hsla(0., 0., 0., 1.)
 }

@@ -13,8 +13,8 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::{
-    InspectorTab, Item, Muralist, boxed, compact_count, details, develop, file_name, glass, headers, icon, kit, pal,
-    parse_hex, purity_color, purity_label, radius, with_alpha,
+    InspectorTab, Item, Muralist, boxed, compact_count, details, develop, file_name, glass, headers, icon, kit, lerp,
+    pal, parse_hex, purity_color, purity_label, radius, with_alpha,
 };
 
 const SHEET_W: f32 = 1100.;
@@ -55,10 +55,6 @@ pub(super) fn palette_match(a: &[Hsla], b: &[Hsla]) -> f32 {
 
 fn hexes(colors: &[String]) -> Vec<Hsla> {
     colors.iter().filter_map(|c| parse_hex(c)).collect()
-}
-
-fn lerp(a: f32, b: f32, t: f32) -> f32 {
-    a + (b - a) * t
 }
 
 impl Muralist {
@@ -231,31 +227,12 @@ impl Muralist {
                 d.child(div().absolute().top_0().left_0().child(boxed(img(m), pw, ph).object_fit(ObjectFit::Cover)))
             })
             // Thirds, and a slow survey beam.
-            .children((1..3).flat_map(|i| {
-                let at = relative(i as f32 / 3.);
-                [
-                    div().absolute().top_0().bottom_0().left(at).w(px(1.)).bg(guide).into_any_element(),
-                    div().absolute().left_0().right_0().top(at).h(px(1.)).bg(guide).into_any_element(),
-                ]
-            }))
-            .child(
-                div()
-                    .absolute()
-                    .left_0()
-                    .right_0()
-                    .h(px(60.))
-                    .bg(linear_gradient(
-                        180.,
-                        linear_color_stop(with_alpha(c, 0.), 0.),
-                        linear_color_stop(with_alpha(c, 0.1), 1.),
-                    ))
-                    .child(div().absolute().left_0().right_0().bottom_0().h(px(1.)).bg(with_alpha(c, 0.35)))
-                    .with_animation(
-                        "sheet-survey",
-                        Animation::new(Duration::from_millis(4800)).repeat().with_easing(ease_in_out),
-                        move |d, t| d.top(px(-60. + t * (ph + 60.))),
-                    ),
-            )
+            .children(develop::thirds(guide))
+            .child(develop::beam(
+                "sheet-survey".into(),
+                develop::Beam { color: c, band: 60., glow: 0.1, line: 0.35, ms: 4800 },
+                ph,
+            ))
             // Side by side with a hovered lookalike, split down the middle.
             .when_some(compare, |d, (m, cid, thumb, fit, pulling)| {
                 let n = self.sheet_compare.unwrap_or(0);
@@ -386,7 +363,7 @@ impl Muralist {
         let facts: Vec<(String, &'static str)> = match &remote {
             Some(w) => {
                 let mut f = vec![(w.resolution.clone(), "maximize")];
-                f.push((format!("{:.1} MB", w.file_size as f64 / 1_048_576.), "hard-drive"));
+                f.push((format!("{:.1} MB", super::mib(w.file_size)), "hard-drive"));
                 f.push((compact_count(w.favorites), "heart"));
                 f.push((w.category.clone(), "tag"));
                 f
@@ -445,7 +422,7 @@ impl Muralist {
             .w(px(aw))
             .h(px(ah))
             .overflow_hidden()
-            .bg(hex_black())
+            .bg(black())
             .when_some(backdrop.map(|(b, _)| b), |d, b| {
                 d.child(img(b).absolute().top_0().left_0().size_full().object_fit(ObjectFit::Cover).opacity(0.55))
             })
@@ -819,13 +796,7 @@ impl Muralist {
                                         ),
                                 ),
                         )
-                        .on_hover(cx.listener(move |this, over: &bool, _, cx| {
-                            let next = if *over { Some(i) } else { this.sheet_compare.filter(|h| *h != i) };
-                            if this.sheet_compare != next {
-                                this.sheet_compare = next;
-                                cx.notify();
-                            }
-                        }))
+                        .on_hover(Self::hover_slot(cx, |this| &mut this.sheet_compare, i))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.sheet_compare = None;
                             this.select(item.clone(), window, cx);
@@ -867,10 +838,6 @@ fn comet(id: &'static str, c: Hsla, span: f32, reverse: bool) -> AnimationElemen
 
 fn gcd(a: u32, b: u32) -> u32 {
     if b == 0 { a } else { gcd(b, a % b) }
-}
-
-fn hex_black() -> Hsla {
-    hsla(0., 0., 0., 1.)
 }
 
 #[cfg(test)]

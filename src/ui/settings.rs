@@ -132,7 +132,7 @@ fn field_box(input: impl IntoElement, p: Pal) -> Div {
 
 /// "512 MB", "1.8 GB".
 fn mb_or_gb(bytes: u64) -> String {
-    let mb = bytes as f64 / 1_048_576.;
+    let mb = super::mib(bytes);
     if mb >= 1024. { format!("{:.1} GB", mb / 1024.) } else { format!("{mb:.0} MB") }
 }
 

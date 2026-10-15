@@ -14,7 +14,9 @@ use gpui_kit::component::{Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::{Item, Muralist, Pal, icon, kit, opt, opt_grid, pal, purity_color, side_card_with, with_alpha};
+use super::{
+    Item, Muralist, Pal, icon, kit, opt, opt_grid, pal, purity_color, purity_label, side_card_with, with_alpha,
+};
 use crate::provenance::wallhaven_id;
 
 /// Tags each category shows before its "+N".
@@ -67,10 +69,6 @@ enum Stage {
 
 const PURITIES: [(&str, &str); 3] = [("sfw", "SFW"), ("sketchy", "Sketchy"), ("nsfw", "NSFW")];
 const CATEGORIES: [(&str, &str); 3] = [("general", "General"), ("anime", "Anime"), ("people", "People")];
-
-fn purity_label(p: &str) -> &'static str {
-    PURITIES.iter().find(|(k, _)| *k == p).map_or("?", |(_, l)| l)
-}
 
 fn category_label(c: &str) -> &'static str {
     CATEGORIES.iter().find(|(k, _)| *k == c).map_or("?", |(_, l)| l)
@@ -195,7 +193,7 @@ impl Muralist {
                 Animation::new(Duration::from_secs_f32(delay + 0.35)),
                 move |d, t| {
                     let t = ((t * (delay + 0.35) - delay) / 0.35).clamp(0., 1.);
-                    let e = 1. - (1. - t).powi(3);
+                    let e = super::glass::ease_out_cubic(t);
                     d.opacity(e).mt(px(18. * (1. - e)))
                 },
             )
@@ -235,29 +233,17 @@ impl Muralist {
                     .into_any_element(),
             ],
             Scan::Scanning => {
-                const BAND: f32 = 34.;
                 let c = p.accent;
                 vec![
                     div().absolute().inset_0().rounded_xl().bg(hsla(0., 0., 0., 0.2)).into_any_element(),
                     // The beam: a soft band with a bright line through it,
                     // sweeping down the card over and over.
-                    div()
-                        .absolute()
-                        .left(px(2.))
-                        .right(px(2.))
-                        .h(px(BAND))
-                        .child(div().absolute().inset_0().bg(linear_gradient(
-                            180.,
-                            linear_color_stop(with_alpha(c, 0.), 0.),
-                            linear_color_stop(with_alpha(c, 0.4), 1.),
-                        )))
-                        .child(div().absolute().left_0().right_0().bottom_0().h(px(2.)).bg(with_alpha(c, 0.95)))
-                        .with_animation(
-                            SharedString::from(format!("scan-{key}")),
-                            Animation::new(Duration::from_millis(1100)).repeat().with_easing(ease_in_out),
-                            move |d, t| d.top(px(-BAND + t * (h + BAND))),
-                        )
-                        .into_any_element(),
+                    super::develop::beam(
+                        SharedString::from(format!("scan-{key}")),
+                        super::develop::Beam { color: c, band: 34., glow: 0.4, line: 0.95, ms: 1100 },
+                        h,
+                    )
+                    .into_any_element(),
                 ]
             }
             Scan::Landed(at) => {
@@ -457,7 +443,7 @@ impl Muralist {
                         picked.contains(id) || query.is_empty() || name.to_lowercase().contains(&query)
                     })
                     .collect();
-                v.sort_by(|a, b| b.3.cmp(&a.3).then_with(|| a.1.cmp(&b.1)));
+                v.sort_by(|a, b| b.3.cmp(&a.3).then_with(|| a.1.cmp(b.1)));
                 (cat, v)
             })
             .filter(|(_, v)| !v.is_empty())

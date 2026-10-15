@@ -23,7 +23,7 @@ const POP_H_MANUAL: f32 = 230.;
 const R: f32 = 14.;
 const OPEN_MS: u64 = 200;
 const CLOSE_MS: u64 = 170;
-const LIMITS: [u32; 4] = [24, 48, 96, 192];
+use super::gallery_edit::LIMITS;
 
 pub(super) struct GalleryPop {
     pub id: u64,
@@ -165,10 +165,7 @@ impl Muralist {
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.pop_source(|s| {
                             let flip = |mut v: [bool; 3]| {
-                                v[i] = !v[i];
-                                if !v.iter().any(|b| *b) {
-                                    v[i] = true;
-                                }
+                                super::gallery_edit::toggle_keeping_one(&mut v, i);
                                 v
                             };
                             match s {
@@ -188,10 +185,7 @@ impl Muralist {
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.pop_source(|s| {
                             if let Source::Smart { search, .. } = s {
-                                search.categories[i] = !search.categories[i];
-                                if !search.categories.iter().any(|b| *b) {
-                                    search.categories[i] = true;
-                                }
+                                super::gallery_edit::toggle_keeping_one(&mut search.categories, i);
                             }
                         });
                         cx.notify();
@@ -394,7 +388,7 @@ impl Muralist {
                 }),
                 move |d, t| {
                     let t = if closing { 1. - t } else { t };
-                    let lerp = |a: f32, b: f32| a + (b - a) * t;
+                    let lerp = |a: f32, b: f32| super::lerp(a, b, t);
                     d.left(px(lerp(fx, tx)))
                         .top(px(lerp(fy, ty)))
                         .w(px(lerp(fw, POP_W)))

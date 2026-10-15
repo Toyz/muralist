@@ -37,10 +37,7 @@ impl Muralist {
     }
 
     fn desktop_box(&self) -> (i32, i32, f64, f64) {
-        let min_x = self.monitors.iter().map(|m| m.x).min().unwrap_or(0);
-        let min_y = self.monitors.iter().map(|m| m.y).min().unwrap_or(0);
-        let max_x = self.monitors.iter().map(|m| m.x + m.width as i32).max().unwrap_or(1);
-        let max_y = self.monitors.iter().map(|m| m.y + m.height as i32).max().unwrap_or(1);
+        let (min_x, min_y, max_x, max_y) = crate::monitors::extent(&self.monitors);
         (min_x, min_y, f64::from(max_x - min_x), f64::from(max_y - min_y))
     }
 

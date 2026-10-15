@@ -15,10 +15,19 @@ use super::{
 use crate::gallery::{SavedSearch, Source};
 use crate::wallhaven::{Sorting, TOP_RANGES};
 
-const LIMITS: [u32; 4] = [24, 48, 96, 192];
+pub(super) const LIMITS: [u32; 4] = [24, 48, 96, 192];
 const PURITY_LABELS: [&str; 3] = ["SFW", "Sketchy", "NSFW"];
 const PURITY_KEYS: [&str; 3] = ["sfw", "sketchy", "nsfw"];
 const CATEGORY_LABELS: [&str; 3] = ["General", "Anime", "People"];
+
+/// Flips one of a set of switches, but never the last one left on: a
+/// search with no purity or no category finds nothing.
+pub(super) fn toggle_keeping_one(switches: &mut [bool; 3], i: usize) {
+    switches[i] = !switches[i];
+    if !switches.iter().any(|b| *b) {
+        switches[i] = true;
+    }
+}
 
 /// The gallery being edited, as it will be saved.
 pub(super) struct GalleryDraft {
@@ -124,10 +133,7 @@ impl Muralist {
                     opt(("ge-purity", i), PURITY_LABELS[i], purity[i], Some(purity_color(PURITY_KEYS[i])), p).on_click(
                         cx.listener(move |this, _, _, cx| {
                             this.edit_search(cx, |s, _| {
-                                s.purity[i] = !s.purity[i];
-                                if !s.purity.iter().any(|b| *b) {
-                                    s.purity[i] = true;
-                                }
+                                toggle_keeping_one(&mut s.purity, i);
                             });
                         }),
                     )
@@ -137,10 +143,7 @@ impl Muralist {
                     opt(("ge-cat", i), CATEGORY_LABELS[i], categories[i], None, p).on_click(cx.listener(
                         move |this, _, _, cx| {
                             this.edit_search(cx, |s, _| {
-                                s.categories[i] = !s.categories[i];
-                                if !s.categories.iter().any(|b| *b) {
-                                    s.categories[i] = true;
-                                }
+                                toggle_keeping_one(&mut s.categories, i);
                             });
                         },
                     ))
@@ -213,10 +216,7 @@ impl Muralist {
                                 &mut this.gallery_edit
                             {
                                 let mut next = purity.unwrap_or(current);
-                                next[i] = !next[i];
-                                if !next.iter().any(|b| *b) {
-                                    next[i] = true;
-                                }
+                                toggle_keeping_one(&mut next, i);
                                 *purity = Some(next);
                             }
                             cx.notify();

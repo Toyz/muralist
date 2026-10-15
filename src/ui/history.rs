@@ -111,7 +111,7 @@ impl Muralist {
                 .into_any_element();
         }
 
-        let stays = stays(&history);
+        let stays = stays(history);
         // Newest first, grouped by day, narrowed to a picked day.
         let mut days: Vec<(NaiveDate, Vec<usize>)> = Vec::new();
         for ix in (0..history.len()).rev() {
@@ -371,10 +371,7 @@ impl Muralist {
         if monitors.is_empty() {
             return div();
         }
-        let min_x = monitors.iter().map(|m| m.x).min().unwrap();
-        let min_y = monitors.iter().map(|m| m.y).min().unwrap();
-        let max_x = monitors.iter().map(|m| m.x + m.width as i32).max().unwrap();
-        let max_y = monitors.iter().map(|m| m.y + m.height as i32).max().unwrap();
+        let (min_x, min_y, max_x, max_y) = crate::monitors::extent(&monitors);
         let scale = (MINI_W / (max_x - min_x) as f32).min(MINI_H / (max_y - min_y) as f32);
         let gap = 4.;
         let screens: Vec<Div> = monitors
@@ -530,7 +527,7 @@ impl Muralist {
         // Stats.
         let total = history.len();
         let locks = history.iter().filter(|e| e.target == "lock").count();
-        let stays = stays(&history);
+        let stays = stays(history);
         let longest = stays.iter().max_by_key(|(_, s)| **s).map(|(ix, s)| (*ix, *s));
         let longest_thumb =
             longest.and_then(|(ix, _)| history[ix].images.values().find_map(|path| self.local_thumb(path)));

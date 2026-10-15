@@ -91,15 +91,6 @@ impl Muralist {
                     |d, t| d.left(relative(-0.2 + 1.3 * t)),
                 )
         };
-        let hover_on = |n: u8| {
-            cx.listener(move |this: &mut Self, over: &bool, _, cx| {
-                let next = if *over { Some(n) } else { this.dossier_hover.filter(|h| *h != n) };
-                if this.dossier_hover != next {
-                    this.dossier_hover = next;
-                    cx.notify();
-                }
-            })
-        };
 
         // ---- Info ----
         let info_hover = self.dossier_hover == Some(0);
@@ -129,7 +120,7 @@ impl Muralist {
                                 move |d, t| {
                                     let delay = ix as f32 * 40.;
                                     let t = ((t * (300. + delay) - delay) / 300.).clamp(0., 1.);
-                                    let e = 1. - (1. - t).powi(3);
+                                    let e = super::glass::ease_out_cubic(t);
                                     d.h(px(h * e))
                                 },
                             )
@@ -187,7 +178,7 @@ impl Muralist {
                     .child(h_flex().flex_none().h(px(36.)).items_end().gap(px(2.)).children(bars)),
             )
             .when(info_hover, |d| d.child(beam("info")))
-            .on_hover(hover_on(0))
+            .on_hover(Self::hover_slot(cx, |this| &mut this.dossier_hover, 0))
             .on_click(cx.listener(|this, _, window, cx| this.open_sheet(InspectorTab::Info, window, cx)));
 
         // ---- Similar ----
@@ -280,7 +271,7 @@ impl Muralist {
                         .when(!failed, |d| d.child(stack)),
                 )
                 .when(sim_hover, |d| d.child(beam("similar")))
-                .on_hover(hover_on(1))
+                .on_hover(Self::hover_slot(cx, |this| &mut this.dossier_hover, 1))
                 .on_click(cx.listener(|this, _, window, cx| this.open_sheet(InspectorTab::Similar, window, cx)))
         });
 

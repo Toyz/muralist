@@ -175,7 +175,7 @@ impl ThemeAnim {
     pub(super) fn step(&mut self, target: Pal) -> (Pal, bool) {
         let now = Instant::now();
         let t = ((now - self.start).as_secs_f32() / TRANSITION_SECS).min(1.);
-        let eased = 1. - (1. - t).powi(3);
+        let eased = super::glass::ease_out_cubic(t);
         let cur = lerp(&self.from, &self.to, eased);
         if target != self.to {
             self.from = cur;

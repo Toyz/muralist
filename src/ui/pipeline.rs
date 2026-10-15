@@ -126,10 +126,7 @@ impl Muralist {
 
     /// Width and height of the whole monitor arrangement, in desktop units.
     fn desk_span(&self) -> (f32, f32) {
-        let min_x = self.monitors.iter().map(|m| m.x).min().unwrap_or(0);
-        let min_y = self.monitors.iter().map(|m| m.y).min().unwrap_or(0);
-        let max_x = self.monitors.iter().map(|m| m.x + m.width as i32).max().unwrap_or(1);
-        let max_y = self.monitors.iter().map(|m| m.y + m.height as i32).max().unwrap_or(1);
+        let (min_x, min_y, max_x, max_y) = crate::monitors::extent(&self.monitors);
         (((max_x - min_x) as f32).max(1.), ((max_y - min_y) as f32).max(1.))
     }
 
@@ -140,8 +137,7 @@ impl Muralist {
         if self.monitors.is_empty() {
             return div().text_sm().text_color(p.muted).child("No displays detected").into_any_element();
         }
-        let min_x = self.monitors.iter().map(|m| m.x).min().unwrap();
-        let min_y = self.monitors.iter().map(|m| m.y).min().unwrap();
+        let (min_x, min_y, _, _) = crate::monitors::extent(&self.monitors);
         let (span_w, span_h) = self.desk_span();
         let scale = (max_w / span_w).min(max_h / span_h);
         let gap = 6.;

@@ -83,7 +83,7 @@ pub(super) fn stagger(id: SharedString, index: usize, child: impl IntoElement) -
         Animation::new(Duration::from_secs_f32(delay + dur))
             .with_easing(move |t| ((t * (delay + dur) - delay) / dur).clamp(0., 1.)),
         |d, t| {
-            let e = 1. - (1. - t).powi(3);
+            let e = ease_out_cubic(t);
             d.opacity(e).mt(px(14. * (1. - e)))
         },
     )
@@ -93,12 +93,30 @@ pub(super) fn stagger(id: SharedString, index: usize, child: impl IntoElement) -
 /// partly faded, offset without moving anything around it.
 pub(super) fn settle(id: SharedString, child: impl IntoElement) -> impl IntoElement {
     div().relative().child(child).with_animation(id, Animation::new(Duration::from_millis(300)), |d, t| {
-        let e = 1. - (1. - t).powi(3);
+        let e = ease_out_cubic(t);
         d.opacity(0.3 + 0.7 * e).top(px(10. * (1. - e)))
     })
 }
 
 impl Muralist {
+    /// A hover listener for a field naming which of several things the
+    /// pointer is on: entering sets it to `key`, leaving clears it only if
+    /// it's still `key` (the pointer may already be on the next one).
+    pub(super) fn hover_slot<T: Copy + PartialEq + 'static>(
+        cx: &mut Context<Self>,
+        slot: fn(&mut Self) -> &mut Option<T>,
+        key: T,
+    ) -> impl Fn(&bool, &mut Window, &mut App) + 'static {
+        cx.listener(move |this, over: &bool, _, cx| {
+            let field = slot(this);
+            let next = if *over { Some(key) } else { field.filter(|h| *h != key) };
+            if *field != next {
+                *field = next;
+                cx.notify();
+            }
+        })
+    }
+
     /// The blurred backdrop of the selection, once baked.
     pub(super) fn backdrop(&mut self) -> Option<(PathBuf, String)> {
         let item = self.selected.clone()?;

@@ -16,3 +16,16 @@ pub struct Monitor {
     /// The desktop's primary display.
     pub primary: bool,
 }
+
+/// The rectangle all monitors cover: `(min_x, min_y, max_x, max_y)` in
+/// logical pixels, never empty (a lone placeholder pixel when there are no
+/// monitors), so it's always safe to scale by.
+pub fn extent(monitors: &[Monitor]) -> (i32, i32, i32, i32) {
+    let right = |m: &Monitor| m.x.saturating_add(i32::try_from(m.width).unwrap_or(i32::MAX));
+    let bottom = |m: &Monitor| m.y.saturating_add(i32::try_from(m.height).unwrap_or(i32::MAX));
+    let min_x = monitors.iter().map(|m| m.x).min().unwrap_or(0);
+    let min_y = monitors.iter().map(|m| m.y).min().unwrap_or(0);
+    let max_x = monitors.iter().map(right).max().unwrap_or(1).max(min_x + 1);
+    let max_y = monitors.iter().map(bottom).max().unwrap_or(1).max(min_y + 1);
+    (min_x, min_y, max_x, max_y)
+}

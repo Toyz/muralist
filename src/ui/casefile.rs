@@ -89,7 +89,7 @@ impl Muralist {
                 format!("ro-mb-{key}").into(),
                 "hard-drive",
                 "MEGABYTES",
-                Some(w.file_size as f64 / 1_048_576.),
+                Some(super::mib(w.file_size)),
                 |v| format!("{v:.1}"),
                 c,
             ))

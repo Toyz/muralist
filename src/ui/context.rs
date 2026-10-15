@@ -239,10 +239,7 @@ impl Muralist {
         // what's on it now. Hover one and this wallpaper wipes across it;
         // hover All and they wipe in one after another.
         let desk = can_set.then(|| {
-            let min_x = self.monitors.iter().map(|m| m.x).min().unwrap_or(0);
-            let min_y = self.monitors.iter().map(|m| m.y).min().unwrap_or(0);
-            let max_x = self.monitors.iter().map(|m| m.x + m.width as i32).max().unwrap_or(1);
-            let max_y = self.monitors.iter().map(|m| m.y + m.height as i32).max().unwrap_or(1);
+            let (min_x, min_y, max_x, max_y) = crate::monitors::extent(&self.monitors);
             let scale = (DESK_W / (max_x - min_x).max(1) as f32).min(DESK_H / (max_y - min_y).max(1) as f32);
             let gap = 8.;
             let all_hover = self.context_hover == Some(ALL);
@@ -281,7 +278,7 @@ impl Muralist {
                                 Animation::new(std::time::Duration::from_secs_f32(0.32 + delay)),
                                 move |d, t| {
                                     let t = ((t * (0.32 + delay) - delay) / 0.32).clamp(0., 1.);
-                                    let e = 1. - (1. - t).powi(3);
+                                    let e = super::glass::ease_out_cubic(t);
                                     d.w(px(iw * e))
                                 },
                             )
@@ -342,13 +339,7 @@ impl Muralist {
                                 } else {
                                     hsla(0., 0., 1., 0.3)
                                 }))
-                                .on_hover(cx.listener(move |this, over: &bool, _, cx| {
-                                    let next = if *over { Some(i) } else { this.context_hover.filter(|h| *h != i) };
-                                    if this.context_hover != next {
-                                        this.context_hover = next;
-                                        cx.notify();
-                                    }
-                                }))
+                                .on_hover(Self::hover_slot(cx, |this| &mut this.context_hover, i))
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.run_context(Action::SetOn(name.clone()), window, cx);
                                 })),
@@ -401,13 +392,7 @@ impl Muralist {
                         .text_color(if all_hover { white() } else { hsla(0., 0., 1., 0.7) })
                         .cursor_pointer()
                         .child("ALL SCREENS")
-                        .on_hover(cx.listener(move |this, over: &bool, _, cx| {
-                            let next = if *over { Some(ALL) } else { this.context_hover.filter(|h| *h != ALL) };
-                            if this.context_hover != next {
-                                this.context_hover = next;
-                                cx.notify();
-                            }
-                        }))
+                        .on_hover(Self::hover_slot(cx, |this| &mut this.context_hover, ALL))
                         .on_click(cx.listener(|this, _, window, cx| this.run_context(Action::SetAll, window, cx))),
                 )
                 .child(
@@ -580,7 +565,7 @@ impl Muralist {
                 ),
                 move |d, t| {
                     let t = if closing { 1. - t } else { t };
-                    let lerp = |a: f32, b: f32| a + (b - a) * t;
+                    let lerp = |a: f32, b: f32| super::lerp(a, b, t);
                     d.left(px(lerp(fx, tx)))
                         .top(px(lerp(fy, ty)))
                         .w(px(lerp(fw, w)))

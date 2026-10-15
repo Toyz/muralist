@@ -200,10 +200,7 @@ impl Muralist {
             })?;
 
         // Spanning the whole desktop.
-        let min_x = self.monitors.iter().map(|m| m.x).min().unwrap_or(0);
-        let min_y = self.monitors.iter().map(|m| m.y).min().unwrap_or(0);
-        let max_x = self.monitors.iter().map(|m| m.x + m.width as i32).max().unwrap_or(1);
-        let max_y = self.monitors.iter().map(|m| m.y + m.height as i32).max().unwrap_or(1);
+        let (min_x, min_y, max_x, max_y) = crate::monitors::extent(&self.monitors);
         let (bw, bh) = ((max_x - min_x) as f32, (max_y - min_y) as f32);
         let px_per_unit = self.monitors.iter().map(|m| m.px_width as f32 / m.width.max(1) as f32).fold(1., f32::max);
         let span_scale = (bw * px_per_unit / iw).max(bh * px_per_unit / ih);
@@ -339,7 +336,7 @@ impl Muralist {
                             move |d, t| {
                                 let delay = ix as f32 * 28.;
                                 let t = ((t * (260. + delay) - delay) / 260.).clamp(0., 1.);
-                                let e = 1. - (1. - t).powi(3);
+                                let e = super::glass::ease_out_cubic(t);
                                 d.opacity(e).top(px(-8. * (1. - e)))
                             },
                         )
