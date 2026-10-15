@@ -966,6 +966,10 @@ pub struct Muralist {
     provenance_pending: HashSet<String>,
     /// The background lookup of saved files: how many done, of how many.
     identifying: Option<(usize, usize)>,
+    /// The Wallhaven ID being looked up this moment.
+    identifying_now: Option<String>,
+    /// When each ID's record landed, for its arrival on the card.
+    identified_at: HashMap<String, Instant>,
     lib_filter: library::LibFilter,
     lib_tag_query: Entity<InputState>,
     /// The gallery the Galleries tab shows.
@@ -1216,6 +1220,8 @@ impl Muralist {
             provenance: crate::provenance::Provenance::load(),
             provenance_pending: HashSet::new(),
             identifying: None,
+            identifying_now: None,
+            identified_at: HashMap::new(),
             lib_filter: library::LibFilter::default(),
             lib_tag_query,
             gallery: None,
@@ -2795,27 +2801,33 @@ impl Muralist {
                     // While saved files are being identified: how far along,
                     // in place of the count. Gone once they're all known.
                     .map(|d| match self.identifying {
+                        // The cards show the scanning; the bar just counts.
                         Some((done, total)) => d.child(
                             h_flex()
                                 .id("identifying")
                                 .flex_none()
-                                .gap_2()
+                                .gap_1p5()
+                                .px_2()
+                                .h(px(22.))
+                                .rounded_full()
+                                .bg(with_alpha(p.accent, 0.14))
+                                .border_1()
+                                .border_color(with_alpha(p.accent, 0.4))
                                 .text_xs()
-                                .text_color(p.muted)
+                                .text_color(p.fg)
                                 .tooltip(|window, cx| {
-                                    Tooltip::new("Looking up what your saved wallpapers are on Wallhaven")
-                                        .build(window, cx)
+                                    Tooltip::new("Identifying your saved wallpapers on Wallhaven").build(window, cx)
                                 })
-                                .child(format!("Identifying {done} of {total}"))
                                 .child(
-                                    div().w(px(96.)).h(px(4.)).rounded_full().bg(with_alpha(p.fg, 0.1)).child(
-                                        div()
-                                            .h_full()
-                                            .rounded_full()
-                                            .bg(p.accent)
-                                            .w(relative((done as f32 / total.max(1) as f32).max(0.04))),
+                                    icon("scan-search").size_3p5().text_color(p.accent).with_animation(
+                                        "identify-pulse",
+                                        Animation::new(std::time::Duration::from_millis(1100))
+                                            .repeat()
+                                            .with_easing(pulsating_between(0.35, 1.)),
+                                        |d, t| d.opacity(t),
                                     ),
-                                ),
+                                )
+                                .child(format!("{done}/{total}")),
                         ),
                         None => {
                             d.child(div().flex_none().text_xs().text_color(p.dim).child(if self.lib_filter.active() {
@@ -3021,6 +3033,9 @@ impl Muralist {
             _ => None,
         };
         let hide = spoiler && !(hovered && self.cfg.spoiler_hover);
+        let scan = self.scan_state(&item);
+        let unidentified = matches!(scan, library::Scan::Waiting | library::Scan::Scanning);
+        let scan_layers = self.scan_layers(scan, &item, w, h, &card_key);
 
         // The picture sits inside the card's border, so its box is the card
         // less the border on each side; pin that ratio exactly.
@@ -3038,6 +3053,7 @@ impl Muralist {
                 let image = radius(
                     box_ratio(img(path.clone()).size_full(), iw, ih)
                         .object_fit(ObjectFit::Cover)
+                        .grayscale(unidentified)
                         .with_loading(move || shimmer(shimmer_id.clone()).into_any_element()),
                     CARD_INNER_R,
                 );
@@ -3178,10 +3194,12 @@ impl Muralist {
                 }
             }));
 
+        let card = card.children(scan_layers);
+
         // Animated edges: on hover the edge flows between the purity color
         // and the image's own; at rest, NSFW edges breathe slowly.
         let edge = purity.as_deref().map(purity_color);
-        match (selected, edge, hovered, purity.as_deref()) {
+        let out = match (selected, edge, hovered, purity.as_deref()) {
             (false, Some(c), true, _) => {
                 let own = glass::glow_color(&colors).unwrap_or(c);
                 card.with_animation(
@@ -3205,7 +3223,8 @@ impl Muralist {
                 )
                 .into_any_element(),
             _ => card.into_any_element(),
-        }
+        };
+        if self.tab == Tab::Library { self.deal_in(out, ix, &card_key) } else { out }
     }
 
     /// A row of shimmering placeholder cards.
@@ -3254,6 +3273,9 @@ impl Muralist {
         let count = self.current_items().len();
         let sub = match self.tab {
             Tab::Discover => format!("{count} wallpapers for these filters"),
+            Tab::Library if self.lib_filter.active() => {
+                format!("{count} of {} match these filters", self.library.len())
+            }
             Tab::Library | Tab::History => format!("{count} wallpapers in your library"),
             Tab::Galleries => format!("{count} wallpapers in this gallery"),
         };
@@ -3937,6 +3959,8 @@ impl Muralist {
             return;
         }
         let client = self.client.clone();
+        self.identifying_now = Some(id.clone());
+        cx.notify();
         cx.spawn(async move |this, cx| {
             let query = id.clone();
             let result = cx
@@ -3947,9 +3971,13 @@ impl Muralist {
                 .await;
             this.update(cx, |this, cx| {
                 this.provenance_pending.remove(&id);
+                if this.identifying_now.as_deref() == Some(id.as_str()) {
+                    this.identifying_now = None;
+                }
                 match result {
                     Ok(()) => {
                         this.provenance = crate::provenance::Provenance::load();
+                        this.identified_at.insert(id.clone(), Instant::now());
                         // Still looking at it: bring in its details too.
                         if matches!(&this.selected, Some(Item::Local(p)) if *p == path) {
                             this.load_info(id.clone(), false, cx);
@@ -3994,7 +4022,14 @@ impl Muralist {
                     })
                     .unwrap_or(true);
                 if !skip {
+                    let now_id = id.clone();
+                    this.update(cx, |this, cx| {
+                        this.identifying_now = Some(now_id);
+                        cx.notify();
+                    })
+                    .ok();
                     let client = client.clone();
+                    let landed_id = id.clone();
                     let got = cx
                         .background_executor()
                         .spawn(async move {
@@ -4002,9 +4037,11 @@ impl Muralist {
                         })
                         .await;
                     this.update(cx, |this, _| {
+                        this.identifying_now = None;
                         // Each card takes on its purity as soon as it's known.
                         if got.is_ok() {
                             this.provenance = crate::provenance::Provenance::load();
+                            this.identified_at.insert(landed_id, Instant::now());
                         }
                     })
                     .ok();
@@ -4311,6 +4348,7 @@ impl Render for Muralist {
         let sidebar = self.render_sidebar(cx);
         let topbar = self.render_topbar(cx);
         let query_chips = if self.tab == Tab::Discover { self.render_query_chips(cx) } else { None };
+        let lib_funnel = if self.tab == Tab::Library { self.render_library_funnel(cx) } else { None };
         let recent = if self.tab == Tab::Discover { self.render_recent(cx) } else { None };
         let grid = if self.tab == Tab::History {
             self.render_history(cx)
@@ -4396,6 +4434,7 @@ impl Render for Muralist {
                     .h_full()
                     .child(topbar)
                     .children(query_chips)
+                    .children(lib_funnel)
                     .child(grid)
                     .children(recent),
             )
