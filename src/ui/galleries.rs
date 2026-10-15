@@ -106,6 +106,9 @@ impl Muralist {
     }
 
     pub(super) fn open_gallery(&mut self, id: u64, cx: &mut Context<Self>) {
+        if self.gallery != Some(id) || self.tab != Tab::Galleries {
+            self.deal();
+        }
         self.tab = Tab::Galleries;
         self.gallery = Some(id);
         self.confirm_delete = None;
@@ -169,7 +172,13 @@ impl Muralist {
 
     /// Freezes the current search into a smart gallery.
     pub(super) fn save_search_as_gallery(&mut self, cx: &mut Context<Self>) {
-        let search = SavedSearch::from_params(&self.current_search(cx).2);
+        let mut search = SavedSearch::from_params(&self.current_search(cx).2);
+        // Name a scoped search for what it is, not its token.
+        search.label = self.scope.clone().and_then(|scope| match scope {
+            super::smartq::Scope::Tag(id) => self.tag_names.get(&id).cloned().flatten().map(|(name, _)| name),
+            super::smartq::Scope::User(name) => Some(format!("@{name}'s uploads")),
+            super::smartq::Scope::Like(id) => Some(format!("Similar to {id}")),
+        });
         let name = self.galleries.unique_name(&search.suggested_name());
         let id = self.galleries.create(name.clone(), Source::Smart { search, limit: SMART_LIMIT });
         // Start with what's on screen; the refresh tops it up.
@@ -215,15 +224,34 @@ impl Muralist {
         self.gallery_work.insert(id, GalleryWork::Refreshing);
         cx.notify();
         cx.spawn(async move |this, cx| {
-            let result = cx.background_executor().spawn(async move { fetch_source(&client, &source, purity) }).await;
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let items = fetch_source(&client, &source, purity)?;
+                    // A search saved before labels existed gets one now.
+                    let label = match &source {
+                        Source::Smart { search, .. } if search.label.is_none() => search.resolve_label(&client),
+                        _ => None,
+                    };
+                    anyhow::Ok((items, label))
+                })
+                .await;
             this.update(cx, |this, cx| {
                 this.gallery_work.remove(&id);
                 match result {
-                    Ok(items) => {
+                    Ok((items, label)) => {
                         let Some(g) = this.galleries.get_mut(id) else { return };
+                        if let (Some(label), Source::Smart { search, .. }) = (label, &mut g.source) {
+                            // Renamed only if it still carries the raw query as its name.
+                            if g.name.trim() == search.query.trim() {
+                                g.name = label.clone();
+                            }
+                            search.label = Some(label);
+                        }
                         g.items = items;
                         g.refreshed = now();
                         let offline = g.offline;
+                        this.deal();
                         this.save_galleries(cx);
                         if offline {
                             this.sync_offline(id, cx);
@@ -331,13 +359,14 @@ impl Muralist {
             self.cfg.wallhaven_user = user.clone();
             self.save_cfg_quietly();
         }
-        let existing =
-            self.galleries.list.iter().find(|g| g.source == Source::Wallhaven { user: user.clone(), collection: c.id });
+        let existing = self.galleries.list.iter().find(
+            |g| matches!(&g.source, Source::Wallhaven { user: u, collection, .. } if *u == user && *collection == c.id),
+        );
         let id = match existing {
             Some(g) => g.id,
             None => {
                 let name = self.galleries.unique_name(&c.label);
-                self.galleries.create(name, Source::Wallhaven { user, collection: c.id })
+                self.galleries.create(name, Source::Wallhaven { user, collection: c.id, purity: None })
             }
         };
         self.save_galleries(cx);
@@ -787,6 +816,18 @@ impl Muralist {
                         .on_click(cx.listener(move |this, _, _, cx| this.refresh_gallery(id, cx))),
                 )
             })
+            .child(
+                kit::Btn::new("gallery-edit")
+                    .icon("sliders-horizontal")
+                    .ghost()
+                    .sm()
+                    .tooltip(match g.source {
+                        Source::Smart { .. } => "Edit the search behind this gallery",
+                        Source::Wallhaven { .. } => "Edit what this collection imports",
+                        Source::Manual => "Rename",
+                    })
+                    .on_click(cx.listener(move |this, _, window, cx| this.open_gallery_editor(id, window, cx))),
+            )
             .child(
                 kit::Btn::new("gallery-offline")
                     .icon("hard-drive-download")

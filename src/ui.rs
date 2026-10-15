@@ -3,6 +3,7 @@ mod context;
 mod details;
 mod drag;
 mod galleries;
+mod gallery_edit;
 mod glass;
 mod gridmodes;
 mod history;
@@ -968,10 +969,15 @@ pub struct Muralist {
     identifying: Option<(usize, usize)>,
     /// The Wallhaven ID being looked up this moment.
     identifying_now: Option<String>,
+    /// Bumped whenever the grid's cards should deal in again.
+    dealt: (u64, Option<Instant>),
     /// When each ID's record landed, for its arrival on the card.
     identified_at: HashMap<String, Instant>,
     lib_filter: library::LibFilter,
     lib_tag_query: Entity<InputState>,
+    gallery_edit: Option<gallery_edit::GalleryDraft>,
+    edit_name: Entity<InputState>,
+    edit_query: Entity<InputState>,
     /// The gallery the Galleries tab shows.
     gallery: Option<u64>,
     gallery_work: HashMap<u64, galleries::GalleryWork>,
@@ -1221,9 +1227,13 @@ impl Muralist {
             provenance_pending: HashSet::new(),
             identifying: None,
             identifying_now: None,
+            dealt: (0, None),
             identified_at: HashMap::new(),
             lib_filter: library::LibFilter::default(),
             lib_tag_query,
+            gallery_edit: None,
+            edit_name: cx.new(|cx| InputState::new(window, cx).placeholder("Gallery name")),
+            edit_query: cx.new(|cx| InputState::new(window, cx).placeholder("Search text")),
             gallery: None,
             gallery_work: HashMap::new(),
             import: None,
@@ -1937,6 +1947,7 @@ impl Muralist {
                         if reset {
                             this.remember_search(&raw, &resp.data);
                             this.results = resp.data;
+                            this.deal();
                             this.grid_scroll.scroll_to_item(0, ScrollStrategy::Top);
                         } else {
                             this.results.extend(resp.data);
@@ -2440,6 +2451,9 @@ impl Muralist {
                         ),
                 )
                 .on_click(cx.listener(move |this, _, _, cx| {
+                    if this.tab != t {
+                        this.deal();
+                    }
                     match t {
                         Tab::Library => this.refresh_library(),
                         Tab::Galleries => return this.show_galleries(cx),
@@ -3224,7 +3238,7 @@ impl Muralist {
                 .into_any_element(),
             _ => card.into_any_element(),
         };
-        if self.tab == Tab::Library { self.deal_in(out, ix, &card_key) } else { out }
+        self.deal_in(out, ix, &card_key)
     }
 
     /// A row of shimmering placeholder cards.
@@ -4366,6 +4380,7 @@ impl Render for Muralist {
         let settings = self.settings_open.then(|| self.render_settings(cx));
         let picker = self.render_picker(cx);
         let sheet = self.render_sheet(cx);
+        let gallery_editor = self.render_gallery_editor(cx);
         let context = self.render_context(cx);
         let span_editor = self.render_span_editor(cx);
 
@@ -4442,6 +4457,7 @@ impl Render for Muralist {
             .children(lightbox)
             .when(!self.lightbox, |d| d.child(self.resize_handle(true, cx)).child(self.resize_handle(false, cx)))
             .children(sheet)
+            .children(gallery_editor)
             .children(picker)
             .children(context)
             .children(toast)

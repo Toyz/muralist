@@ -128,7 +128,14 @@ impl Muralist {
     fn touch_filter(&mut self, cx: &mut Context<Self>) {
         self.lib_filter.generation += 1;
         self.lib_filter.changed = Some(Instant::now());
+        self.deal();
         cx.notify();
+    }
+
+    /// The grid's cards deal in afresh: new results, another tab or
+    /// gallery, a changed filter.
+    pub(super) fn deal(&mut self) {
+        self.dealt = (self.dealt.0 + 1, Some(Instant::now()));
     }
 
     pub(super) fn clear_lib_filter(&mut self, cx: &mut Context<Self>) {
@@ -163,9 +170,10 @@ impl Muralist {
     /// Wraps a Library card so the grid deals back in after a filter change,
     /// staggered across the grid.
     pub(super) fn deal_in(&self, card: AnyElement, ix: usize, key: &str) -> AnyElement {
-        let Some(changed) = self.lib_filter.changed.filter(|t| t.elapsed() < DEAL) else { return card };
-        let _ = changed;
-        let generation_n = self.lib_filter.generation;
+        let (generation_n, at) = self.dealt;
+        if !at.is_some_and(|t| t.elapsed() < DEAL) {
+            return card;
+        }
         let delay = (ix as f32 * 0.04).min(0.45);
         div()
             .child(card)

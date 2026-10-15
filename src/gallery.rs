@@ -58,6 +58,10 @@ pub struct SavedSearch {
     pub resolutions: Option<String>,
     #[serde(default)]
     pub color: Option<String>,
+    /// A readable name for the query, when it's a tag (`id:123`), an
+    /// uploader (`@name`) or a similar-image search (`like:abc123`).
+    #[serde(default)]
+    pub label: Option<String>,
 }
 
 impl SavedSearch {
@@ -72,6 +76,7 @@ impl SavedSearch {
             atleast: p.atleast.clone(),
             resolutions: p.resolutions.clone(),
             color: p.color.clone(),
+            label: None,
         }
     }
 
@@ -95,8 +100,10 @@ impl SavedSearch {
     pub fn describe(&self) -> String {
         let sorting = Sorting::from_api(&self.sorting).unwrap_or(Sorting::DateAdded);
         let mut parts = Vec::new();
-        if !self.query.trim().is_empty() {
-            parts.push(format!("\"{}\"", self.query.trim()));
+        match &self.label {
+            Some(label) => parts.push(label.clone()),
+            None if !self.query.trim().is_empty() => parts.push(format!("\"{}\"", self.query.trim())),
+            None => {}
         }
         parts.push(if sorting == Sorting::Toplist {
             format!("Top {}", self.top_range)
@@ -114,8 +121,27 @@ impl SavedSearch {
 
     /// A gallery name for this search.
     pub fn suggested_name(&self) -> String {
+        if let Some(label) = &self.label {
+            return label.clone();
+        }
         let q = self.query.trim();
         if q.is_empty() { self.describe() } else { q.to_owned() }
+    }
+
+    /// Works out a readable label for a scoped query (`id:123`, `@name`,
+    /// `like:abc123`). Blocking: a tag needs a lookup. None for plain text.
+    pub fn resolve_label(&self, client: &Client) -> Option<String> {
+        let q = self.query.trim();
+        if let Some(id) = q.strip_prefix("id:").and_then(|n| n.parse::<u64>().ok()) {
+            return client.tag(id).ok().map(|t| t.name);
+        }
+        if let Some(user) = q.strip_prefix('@').filter(|u| !u.is_empty() && !u.contains(' ')) {
+            return Some(format!("@{user}'s uploads"));
+        }
+        if let Some(id) = q.strip_prefix("like:").filter(|i| !i.is_empty()) {
+            return Some(format!("Similar to {id}"));
+        }
+        None
     }
 }
 
@@ -128,7 +154,13 @@ pub enum Source {
     /// The top results of a saved search, refreshed on demand.
     Smart { search: SavedSearch, limit: u32 },
     /// A copy of a Wallhaven collection.
-    Wallhaven { user: String, collection: u64 },
+    Wallhaven {
+        user: String,
+        collection: u64,
+        /// Purities to import; the current search's when unset.
+        #[serde(default)]
+        purity: Option<[bool; 3]>,
+    },
 }
 
 impl Source {
@@ -276,7 +308,8 @@ pub fn fetch_source(client: &Client, source: &Source, purity: [bool; 3]) -> Resu
             }
             out.truncate(*limit as usize);
         }
-        Source::Wallhaven { user, collection } => {
+        Source::Wallhaven { user, collection, purity: own } => {
+            let purity = own.unwrap_or(purity);
             for page in 1..=COLLECTION_PAGES {
                 let resp = client.collection(user, *collection, purity, page)?;
                 let last = resp.meta.last_page;

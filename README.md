@@ -76,7 +76,8 @@ beside it.
 ### Galleries that keep themselves
 
 Hand-pick galleries by dragging cards onto them, save any search as a smart
-gallery that refreshes daily, or import your Wallhaven collections. Keep one
+gallery that refreshes daily (and edit its search any time), or import your
+Wallhaven collections. Keep one
 offline and its originals download in the background, then let auto-rotate
 play through it.
 
