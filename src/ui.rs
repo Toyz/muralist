@@ -430,6 +430,8 @@ fn keycap(label: &'static str, p: Pal) -> Div {
 
 /// How long the active nav tile holds each image before dissolving.
 const NAV_HOLD_SECS: f32 = 3.5;
+/// Share of each image's turn spent fading in.
+const DISSOLVE_FADE: f32 = 0.3;
 /// Corner radius of the nav tiles.
 const NAV_TILE_R: f32 = 8.;
 
@@ -438,14 +440,13 @@ const NAV_TILE_R: f32 = 8.;
 /// fades in over the first part of its turn and hands over to the next as
 /// that one fades in, so neighboring weights always sum to one.
 fn dissolve_weight(phase: f32, n: f32) -> f32 {
-    const FADE: f32 = 0.3;
     let ph = phase.rem_euclid(n);
-    if ph < FADE {
-        ph / FADE
+    if ph < DISSOLVE_FADE {
+        ph / DISSOLVE_FADE
     } else if ph < 1. {
         1.
-    } else if ph < 1. + FADE {
-        1. - (ph - 1.) / FADE
+    } else if ph < 1. + DISSOLVE_FADE {
+        1. - (ph - 1.) / DISSOLVE_FADE
     } else {
         0.
     }
@@ -2235,7 +2236,11 @@ impl Muralist {
                             .with_animation(
                                 SharedString::from(format!("{id}-dissolve-{k}-{n}")),
                                 Animation::new(std::time::Duration::from_secs_f32(n as f32 * NAV_HOLD_SECS)).repeat(),
-                                move |d, t| d.opacity(dissolve_weight(t * n as f32 - k as f32, n as f32)),
+                                // Start mid-hold on the first image, the one the
+                                // tile showed before it was chosen.
+                                move |d, t| {
+                                    d.opacity(dissolve_weight(t * n as f32 - k as f32 + DISSOLVE_FADE, n as f32))
+                                },
                             )
                             .into_any_element()
                     })
@@ -4194,7 +4199,16 @@ impl Render for Muralist {
 
 #[cfg(test)]
 mod tests {
-    use super::{dissolve_weight, thousands};
+    use super::{DISSOLVE_FADE, dissolve_weight, thousands};
+
+    #[test]
+    fn dissolve_opens_on_the_first_image() {
+        for n in [2usize, 3] {
+            let w: Vec<f32> = (0..n).map(|k| dissolve_weight(DISSOLVE_FADE - k as f32, n as f32)).collect();
+            assert_eq!(w[0], 1., "n={n}: {w:?}");
+            assert!(w[1..].iter().all(|x| *x == 0.), "n={n}: {w:?}");
+        }
+    }
 
     #[test]
     fn dissolve_weights_always_sum_to_one() {
