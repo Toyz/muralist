@@ -50,11 +50,9 @@ impl Muralist {
         let Some(pop) = self.gallery_pop.as_mut().filter(|p| !p.closing) else { return };
         pop.closing = true;
         let (id, seq, opened_with) = (pop.id, pop.seq, pop.opened_with.clone());
-        if self.galleries.get(id).is_some_and(|g| g.source != opened_with) {
-            if let Err(e) = self.galleries.save() {
-                self.set_status(format!("Saving galleries failed: {e:#}"), true, cx);
-            }
-            self.refresh_gallery(id, cx);
+        let changed = self.galleries.get(id).is_some_and(|g| g.source != opened_with);
+        if changed && let Err(e) = self.galleries.save() {
+            self.set_status(format!("Saving galleries failed: {e:#}"), true, cx);
         }
         cx.notify();
         cx.spawn(async move |this, cx| {
@@ -62,8 +60,13 @@ impl Muralist {
             this.update(cx, |this, cx| {
                 if this.gallery_pop.as_ref().is_some_and(|p| p.seq == seq) {
                     this.gallery_pop = None;
-                    cx.notify();
                 }
+                // Only now, with the card back in its tile, so nothing
+                // moves under the animation.
+                if changed {
+                    this.refresh_gallery(id, cx);
+                }
+                cx.notify();
             })
             .ok();
         })
@@ -350,6 +353,8 @@ impl Muralist {
         let card = v_flex()
             .id("gallery-pop")
             .absolute()
+            // Clipped to its growing box, so nothing shows outside it mid-flight.
+            .overflow_hidden()
             .rounded(px(R))
             .bg(p.bg)
             .shadow_lg()

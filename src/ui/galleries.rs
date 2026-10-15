@@ -643,11 +643,25 @@ impl Muralist {
                             .when(!manual, |d| d.child(icon(kind).size_3()))
                             .child(format!("{n} wallpaper{}", if n == 1 { "" } else { "s" }))
                             .when(offline, |d| d.child(icon("hard-drive-download").size_3()))
-                            .when(rotating, |d| d.child(icon("shuffle").size_3().text_color(c)))
-                            .children(status),
+                            .when(rotating, |d| d.child(icon("shuffle").size_3().text_color(c))),
                     ),
             )
             .child(actions)
+            // Busy state as a corner badge, so the tile never reflows.
+            .children(status.map(|s| {
+                h_flex()
+                    .absolute()
+                    .bottom(px(6.))
+                    .right(px(8.))
+                    .h(px(16.))
+                    .px_1p5()
+                    .gap_1()
+                    .rounded_full()
+                    .bg(hsla(0., 0., 0., 0.55))
+                    .text_size(px(10.))
+                    .text_color(white())
+                    .child(s)
+            }))
             // The edge last, so the picture can't paint over it.
             .child(
                 div()

@@ -450,6 +450,8 @@ impl Muralist {
         let card = v_flex()
             .id("context-card")
             .absolute()
+            // Clipped to its growing box, so nothing shows outside it mid-flight.
+            .overflow_hidden()
             .rounded(px(R))
             .bg(p.bg)
             .shadow_lg()
