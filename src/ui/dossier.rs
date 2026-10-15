@@ -284,6 +284,12 @@ impl Muralist {
                 .on_click(cx.listener(|this, _, window, cx| this.open_sheet(InspectorTab::Similar, window, cx)))
         });
 
-        h_flex().gap_2().child(info_tile).children(sim_tile).into_any_element()
+        let bounds = self.dossier_bounds.clone();
+        h_flex()
+            .gap_2()
+            .on_children_prepainted(move |b, _, _| *bounds.borrow_mut() = b)
+            .child(info_tile)
+            .children(sim_tile)
+            .into_any_element()
     }
 }

@@ -17,7 +17,7 @@ const ARM: f32 = 16.;
 const THICK: f32 = 2.;
 
 /// One L-shaped corner bracket, `inset` in from its corner.
-fn bracket(corner: usize, inset: f32, c: Hsla) -> Div {
+pub(super) fn bracket(corner: usize, inset: f32, c: Hsla) -> Div {
     let (left, top) = (corner % 2 == 0, corner < 2);
     let arm = |horizontal: bool| {
         let d = div().absolute().bg(c);

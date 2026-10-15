@@ -1058,7 +1058,8 @@ impl Muralist {
         let content = match item {
             Item::Remote(w) => {
                 let w = w.clone();
-                self.render_info_tab(&w, cx)
+                let c = glass::glow_color(&self.selected_colors()).unwrap_or(p.accent);
+                self.render_case_info(&w, c, cx)
             }
             Item::Local(path) => {
                 let path = path.clone();

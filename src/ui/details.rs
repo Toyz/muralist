@@ -8,7 +8,7 @@ use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::{Item, Muralist, TAG_LIMIT, icon, pal, purity_color, radius, section, with_alpha};
+use super::{Item, Muralist, TAG_LIMIT, icon, pal, purity_color, section, with_alpha};
 use crate::thumbs::Job;
 use crate::wallhaven::{SearchParams, Sorting, Tag, Wallpaper};
 
@@ -28,7 +28,7 @@ fn lookalikes_by_hand(
     client: &crate::wallhaven::Client,
     id: &str,
     purity: [bool; 3],
-) -> anyhow::Result<Vec<Wallpaper>> {
+) -> anyhow::Result<(Vec<Wallpaper>, Option<String>)> {
     let (w, tags) = client.wallpaper(id)?;
     let tag = tags.iter().min_by_key(|t| tag_rank(&t.category).0).map(|t| format!("id:{}", t.id));
     let color = w.colors.first().map(|c| c.trim_start_matches('#').to_owned());
@@ -63,7 +63,7 @@ fn lookalikes_by_hand(
             }
         }
     }
-    Ok(found)
+    Ok((found, tag))
 }
 
 /// Tag categories by how much they say about a wallpaper.
@@ -327,6 +327,18 @@ impl Muralist {
                         .when_some(tint, |d, c| d.child(div().size(px(5.)).rounded_full().bg(c)))
                         .child(tag.name.clone())
                         .on_click(cx.listener(move |this, _, window, cx| this.search_for(query.clone(), window, cx)))
+                        // Dropping in one after another.
+                        .relative()
+                        .with_animation(
+                            SharedString::from(format!("tag-in-{}", tag.id)),
+                            Animation::new(Duration::from_millis(260 + ix as u64 * 28)),
+                            move |d, t| {
+                                let delay = ix as f32 * 28.;
+                                let t = ((t * (260. + delay) - delay) / 260.).clamp(0., 1.);
+                                let e = 1. - (1. - t).powi(3);
+                                d.opacity(e).top(px(-8. * (1. - e)))
+                            },
+                        )
                         .into_any_element()
                 })
                 .collect();
@@ -405,7 +417,7 @@ impl Muralist {
                 .spawn(async move {
                     let like = if skip_like { None } else { Some(client.search(&params)) };
                     match like {
-                        Some(Ok(resp)) => (Ok(resp.data), false),
+                        Some(Ok(resp)) => (Ok((resp.data, Some(params.query.clone()))), false),
                         Some(Err(e)) if !format!("{e:#}").contains("403") => (Err(e), false),
                         _ => (lookalikes_by_hand(&client, &params.query[5..], params.purity), true),
                     }
@@ -415,7 +427,12 @@ impl Muralist {
                 let (result, blocked) = result;
                 this.like_blocked |= blocked;
                 let state = match result {
-                    Ok(list) => Similar::Ready(list.into_iter().filter(|w| w.id != id).take(6).collect()),
+                    Ok((list, query)) => {
+                        if let Some(q) = query {
+                            this.similar_query.insert(id.clone(), q);
+                        }
+                        Similar::Ready(list.into_iter().filter(|w| w.id != id).take(6).collect())
+                    }
                     Err(e) => {
                         eprintln!("similar to {id}: {e:#}");
                         Similar::Failed
@@ -427,81 +444,6 @@ impl Muralist {
             .ok();
         })
         .detach();
-    }
-
-    pub(super) fn render_similar(&mut self, w: &Wallpaper, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let p = pal();
-        let cell_w = ((self.details_w - 2. * 6.) / 3.).floor();
-        let cell_h = (cell_w * 0.62).floor();
-        let body: AnyElement = match self.similar.get(&w.id) {
-            None | Some(Similar::Loading) => div()
-                .grid()
-                .grid_cols(3)
-                .gap(px(6.))
-                .children((0..6).map(|i| {
-                    div()
-                        .relative()
-                        .overflow_hidden()
-                        .h(px(cell_h))
-                        .rounded_md()
-                        .bg(p.bg)
-                        .child(super::shimmer(SharedString::from(format!("similar-sk-{i}"))))
-                }))
-                .into_any_element(),
-            Some(Similar::Failed) => return None,
-            Some(Similar::Ready(list)) if list.is_empty() => return None,
-            Some(Similar::Ready(list)) => {
-                let list = list.clone();
-                let cells: Vec<AnyElement> = list
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, sw)| {
-                        let thumb = self.remote_thumb(&sw, false);
-                        let c = purity_color(&sw.purity);
-                        let item = Item::Remote(sw);
-                        div()
-                            .id(("similar", i))
-                            .h(px(cell_h))
-                            .rounded_md()
-                            .overflow_hidden()
-                            .bg(p.bg)
-                            .border_1()
-                            .border_color(with_alpha(c, 0.4))
-                            .cursor_pointer()
-                            .hover(move |s| s.border_color(c))
-                            .when_some(thumb, |d, t| {
-                                d.child(radius(img(t).size_full().object_fit(ObjectFit::Cover), 5.))
-                            })
-                            .on_click(cx.listener(move |this, _, window, cx| this.select(item.clone(), window, cx)))
-                            .into_any_element()
-                    })
-                    .collect();
-                div().grid().grid_cols(3).gap(px(6.)).children(cells).into_any_element()
-            }
-        };
-        let like = format!("like:{}", w.id);
-        Some(
-            v_flex()
-                .gap_2()
-                .child(
-                    h_flex()
-                        .justify_between()
-                        .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(p.dim).child("SIMILAR"))
-                        .child(
-                            div()
-                                .id("similar-all")
-                                .text_xs()
-                                .text_color(p.accent)
-                                .cursor_pointer()
-                                .child("See all")
-                                .on_click(
-                                    cx.listener(move |this, _, window, cx| this.search_for(like.clone(), window, cx)),
-                                ),
-                        ),
-                )
-                .child(body)
-                .into_any_element(),
-        )
     }
 }
 
@@ -521,165 +463,4 @@ pub(super) fn ago(created_at: &str) -> Option<(String, bool)> {
     };
     let plural = if n == 1 || unit == "min" || unit == "h" { "" } else { "s" };
     Some((format!("{n} {unit}{plural} ago"), fresh))
-}
-
-impl Muralist {
-    /// The Info tab: facts, fit, palette, tags. Plain sections, no card shell.
-    pub(super) fn render_info_tab(&mut self, w: &Wallpaper, cx: &mut Context<Self>) -> AnyElement {
-        let p = pal();
-        let info = match self.info.get(&w.id) {
-            Some(super::InfoState::Ready(i)) => Some(i.clone()),
-            _ => None,
-        };
-        let failed = match self.info.get(&w.id) {
-            Some(super::InfoState::Failed(e)) => Some(e.clone()),
-            _ => None,
-        };
-
-        let fact = |label: &str, value: AnyElement| {
-            v_flex()
-                .min_w_0()
-                .gap_0p5()
-                .child(div().text_xs().text_color(p.dim).child(label.to_string()))
-                .child(div().text_sm().truncate().child(value))
-        };
-        let text = |s: String| div().child(s).into_any_element();
-
-        let uploader = info.as_ref().and_then(|i| i.uploader.clone());
-        let avatar = uploader.as_ref().and_then(|u| {
-            let url = u.avatar.get("32px")?.clone();
-            self.thumb(format!("avatar-{}", u.username), |key| Job::Remote { key, url })
-        });
-        let by: AnyElement = match uploader {
-            Some(u) => {
-                let name = u.username.clone();
-                h_flex()
-                    .id("uploader")
-                    .gap_1p5()
-                    .cursor_pointer()
-                    .hover(move |s| s.text_color(p.accent))
-                    .child(
-                        div()
-                            .size(px(16.))
-                            .flex_none()
-                            .rounded_full()
-                            .overflow_hidden()
-                            .bg(p.elevated)
-                            .when_some(avatar, |d, a| {
-                                d.child(radius(img(a).size_full().object_fit(ObjectFit::Cover), 8.))
-                            }),
-                    )
-                    .child(div().truncate().child(format!("@{}", u.username)))
-                    .on_click(cx.listener(move |this, _, window, cx| this.search_for(format!("@{name}"), window, cx)))
-                    .into_any_element()
-            }
-            None => text("...".into()),
-        };
-        let uploaded: AnyElement = match info.as_ref().and_then(|i| ago(&i.created_at)) {
-            Some((when, fresh)) => h_flex()
-                .gap_1p5()
-                .child(when)
-                .when(fresh, |d| {
-                    d.child(
-                        div()
-                            .px_1p5()
-                            .rounded_sm()
-                            .bg(with_alpha(p.ok, 0.18))
-                            .text_xs()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(p.ok)
-                            .child("NEW"),
-                    )
-                })
-                .into_any_element(),
-            None => text("...".into()),
-        };
-        let views = info.as_ref().map(|i| super::compact_count(i.views)).unwrap_or_else(|| "...".into());
-        let source = info.as_ref().map(|i| i.source.clone()).filter(|s| !s.is_empty());
-
-        let facts = div()
-            .grid()
-            .grid_cols(2)
-            .gap_x_4()
-            .gap_y_3()
-            .child(fact("Resolution", text(w.resolution.clone())))
-            .child(fact("File size", text(format!("{:.1} MB", w.file_size as f64 / 1_048_576.0))))
-            .child(fact("Uploaded", uploaded))
-            .child(fact("Views", text(views)))
-            .child(fact("By", by))
-            .child(fact(
-                "Source",
-                match source {
-                    Some(url) => {
-                        let host = url
-                            .split("//")
-                            .nth(1)
-                            .and_then(|r| r.split('/').next())
-                            .unwrap_or(&url)
-                            .trim_start_matches("www.")
-                            .to_owned();
-                        h_flex()
-                            .id("source")
-                            .gap_1()
-                            .cursor_pointer()
-                            .hover(move |s| s.text_color(p.accent))
-                            .child(div().truncate().child(host))
-                            .child(icon("external-link").size_3())
-                            .on_click(move |_, _, cx| cx.open_url(&url))
-                            .into_any_element()
-                    }
-                    None => text("-".into()),
-                },
-            ));
-
-        let tags: AnyElement = match (&info, failed) {
-            (Some(i), _) if i.tags.is_empty() => {
-                div().text_xs().text_color(p.dim).child("No tags yet").into_any_element()
-            }
-            (Some(i), _) => {
-                let tags = i.tags.clone();
-                self.render_tag_groups(&tags, cx)
-            }
-            (None, Some(e)) => {
-                let id = w.id.clone();
-                h_flex()
-                    .id("info-retry")
-                    .gap_2()
-                    .text_xs()
-                    .text_color(p.dim)
-                    .cursor_pointer()
-                    .child(icon("circle-alert").size_3p5().text_color(p.error))
-                    .child(format!("Couldn't load tags ({e}). Retry"))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.load_info(id.clone(), true, cx);
-                        cx.notify();
-                    }))
-                    .into_any_element()
-            }
-            (None, None) => h_flex()
-                .flex_wrap()
-                .gap_1p5()
-                .children([64., 92., 52., 104., 70.].into_iter().enumerate().map(|(i, w)| {
-                    div()
-                        .relative()
-                        .overflow_hidden()
-                        .w(px(w))
-                        .h(px(26.))
-                        .rounded_md()
-                        .bg(p.surface2)
-                        .child(super::shimmer(SharedString::from(format!("tag-sk-{i}"))))
-                }))
-                .into_any_element(),
-        };
-
-        let fit = self.render_fit_check(w);
-        let palette = self.render_xray_palette(cx);
-        v_flex()
-            .gap_5()
-            .children(fit)
-            .children(palette)
-            .child(section("About", p).child(facts))
-            .child(section("Tags", p).child(tags))
-            .into_any_element()
-    }
 }

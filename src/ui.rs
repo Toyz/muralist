@@ -1,4 +1,5 @@
 mod adaptive;
+mod casefile;
 mod context;
 mod details;
 mod develop;
@@ -1009,6 +1010,15 @@ pub struct Muralist {
     dossier_hover: Option<u8>,
     /// Wallhaven has challenged a `like:` search this session.
     like_blocked: bool,
+    /// The search that found each wallpaper's lookalikes, for "See all".
+    similar_query: HashMap<String, String>,
+    /// Where the Info and Similar dossiers sit, for the modal to grow from.
+    dossier_bounds: Rc<RefCell<Vec<Bounds<Pixels>>>>,
+    /// The Info/Similar modal's open or close in flight.
+    sheet_anim: Option<sheet::SheetAnim>,
+    sheet_seq: u64,
+    /// The lookalike hovered in the modal, compared against the selection.
+    sheet_compare: Option<usize>,
     history_hover: Option<usize>,
     /// The day the History timeline is narrowed to, if any.
     history_day: Option<chrono::NaiveDate>,
@@ -1267,6 +1277,11 @@ impl Muralist {
             gear_hover: false,
             dossier_hover: None,
             like_blocked: false,
+            similar_query: HashMap::new(),
+            dossier_bounds: Rc::new(RefCell::new(Vec::new())),
+            sheet_anim: None,
+            sheet_seq: 0,
+            sheet_compare: None,
             history_hover: None,
             history_day: None,
             history_month: None,
