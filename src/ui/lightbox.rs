@@ -948,7 +948,7 @@ impl Muralist {
     fn render_lb_dock(&mut self, item: &Item, cx: &mut Context<Self>) -> AnyElement {
         let p = pal();
         let mode = self.target;
-        let lock_ok = self.caps.lock_screen;
+        let lock_ok = self.backend.lock().is_some();
         let target_seg = |id: &'static str, label: &'static str, m: super::TargetMode| {
             segment(id, label, mode == m, p).px_2().on_click(cx.listener(move |this, _, _, cx| {
                 this.target = m;

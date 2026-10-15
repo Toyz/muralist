@@ -52,19 +52,58 @@ Never commit an API key. Tests read it from the environment.
 
 ## Adding a desktop backend
 
-Each desktop implements `Backend` in `src/backend/mod.rs`:
+Backends describe what they can do with trait impls, not flags. There are two
+surfaces, `Desktop` and `Lock`, and three abilities per surface:
 
-- `capabilities()` says what the desktop can do: per-monitor desktop
-  wallpapers, a lock screen, per-monitor lock screens, and whether the
-  current wallpaper can be read back. The UI hides controls a backend can't
-  support, so be honest here.
-- `monitors()` returns connected outputs with their position, size and scale.
-  Spanning depends on these being accurate.
-- `set_desktop` and `set_lock` receive one image path per monitor.
+| Trait          | Meaning                                         |
+|----------------|-------------------------------------------------|
+| `SetOne<S>`    | One image across every monitor                  |
+| `SetEach<S>`   | A different image per monitor                   |
+| `ReadBack<S>`  | Report what is set now (Peek restores from it)  |
 
-Then add a match arm to `detect()`, usually keyed on `XDG_CURRENT_DESKTOP`.
-`src/backend/plasma/` is the reference implementation. GNOME, Sway/wlroots
-(via `swaybg` or `swww`) and Hyprland (`hyprpaper`) would all be welcome.
+A GNOME backend might look like this:
+
+```rust
+pub struct Gnome;
+
+impl Backend for Gnome {
+    const ID: &'static str = "gnome";
+    const NAME: &'static str = "GNOME";
+    // Only compiles if the impls below exist.
+    const CAPS: Caps<Self> = Caps { desktop: Ops::one().read(), lock: Some(Ops::one()) };
+
+    fn matches(desktop: &str) -> bool {
+        desktop.split(':').any(|d| d.eq_ignore_ascii_case("GNOME"))
+    }
+    fn connect() -> Result<Self> { Ok(Self) }
+    fn monitors(&self) -> Result<Vec<Monitor>> { /* ... */ }
+}
+
+impl SetOne<Desktop> for Gnome { /* gsettings set org.gnome.desktop.background ... */ }
+impl ReadBack<Desktop> for Gnome { /* ... */ }
+impl SetOne<Lock> for Gnome { /* org.gnome.desktop.screensaver ... */ }
+```
+
+Then add it to the `backends!` list in `src/backend/mod.rs`, `cfg`-gated if
+it is OS-specific. That generates the `Session` enum variant, detection and
+dispatch.
+
+Things the compiler checks for you:
+
+- `CAPS` can't claim an ability the backend doesn't implement: `Ops::each()`
+  requires `SetEach`, `.read()` requires `ReadBack`, and so on.
+- Per-monitor support (`Reach`) comes from whether `SetEach` is implemented,
+  so it can't drift from the code.
+- The UI only gets a handle to a surface the backend supports, so it can't
+  call into one that isn't there. Controls for missing surfaces are hidden.
+
+A surface with only `SetOne` still works with per-monitor assignments: the
+primary monitor's image is used everywhere.
+
+`src/backend/plasma/` is the reference implementation, and the `Fake` backend
+in the tests at the bottom of `src/backend/mod.rs` is a small example.
+GNOME, Sway/wlroots (`swaybg`, `swww`) and Hyprland (`hyprpaper`) would all be
+welcome.
 
 ## Style
 

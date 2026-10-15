@@ -3,15 +3,16 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{Result, bail};
+use anyhow::{Context as _, Result, bail};
 use chrono::Timelike as _;
 use gpui_kit::*;
 
 use super::slot::{fits_one_screen, lab, palette, palette_distance};
 use super::{Muralist, adaptive};
-use crate::backend::SharedBackend;
+use crate::backend::Session;
 use crate::config::{LockMode, RotateSource, cache_dir};
 use crate::monitors::Monitor;
 use crate::span;
@@ -48,7 +49,7 @@ fn rng(state: &mut u64) -> u64 {
 
 /// Everything the background rotation needs, captured up front.
 struct Job {
-    backend: SharedBackend,
+    backend: Arc<Session>,
     client: Client,
     params: SearchParams,
     monitors: Vec<Monitor>,
@@ -71,9 +72,9 @@ impl Job {
             RotateSource::Search => self.from_search(lo, hi, &mut seed)?,
             RotateSource::Library => self.from_library(lo, hi, &mut seed)?,
         };
-        self.backend.set_desktop(&map, &self.monitors)?;
-        if let Some(mode) = self.lock {
-            self.backend.set_lock(&map, &self.monitors, mode)?;
+        self.backend.desktop().context("no desktop backend")?.set(&map, &self.monitors)?;
+        if let (Some(mode), Some(lock)) = (self.lock, self.backend.lock()) {
+            lock.apply(&map, &self.monitors, mode)?;
         }
         Ok(map)
     }

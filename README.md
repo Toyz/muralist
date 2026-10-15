@@ -58,8 +58,9 @@ wallpaper.
 | KDE Plasma 6 (Wayland or X11) | yes | yes | yes |
 | Others      | browse and download only | | |
 
-Backends sit behind a small trait (`src/backend/mod.rs`), so adding a desktop
-is mostly a matter of implementing it. See [CONTRIBUTING.md](CONTRIBUTING.md).
+Each desktop is a backend that declares what it can do through trait impls,
+checked at compile time, so adding one is mostly a matter of implementing a
+few small traits. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 On Plasma, the per-monitor lock screen uses a small wallpaper plugin
 (`dev.muralist.perscreen`), installed to `~/.local/share/plasma/wallpapers`
@@ -115,8 +116,8 @@ Other files:
 - `~/.cache/muralist/`: thumbnails and sliced span images. Safe to clear from
   the settings dialog.
 
-`MURALIST_BACKEND` forces a backend (`plasma` or `unsupported`), which is
-useful when testing.
+`MURALIST_BACKEND` forces a backend by ID (`plasma`). Any other value
+disables wallpaper setting, which is useful when testing the UI.
 
 ## Keyboard
 

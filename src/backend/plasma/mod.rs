@@ -5,46 +5,67 @@
 mod kscreen;
 mod shell;
 
+use std::path::Path;
+
 use anyhow::Result;
 
-use super::{Backend, Capabilities, Images, primary_image};
-use crate::config::LockMode;
+use super::{Backend, Caps, Desktop, Images, Lock, Ops, ReadBack, SetEach, SetOne};
 use crate::monitors::Monitor;
 
-pub(super) struct Plasma;
+pub struct Plasma;
 
 impl Backend for Plasma {
-    fn name(&self) -> &str {
-        "KDE Plasma"
+    const ID: &'static str = "plasma";
+    const NAME: &'static str = "KDE Plasma";
+    const CAPS: Caps<Self> = Caps { desktop: Ops::each().read(), lock: Some(Ops::each().read()) };
+
+    fn matches(desktop: &str) -> bool {
+        desktop.split(':').any(|d| d.eq_ignore_ascii_case("KDE"))
     }
 
-    fn capabilities(&self) -> Capabilities {
-        Capabilities { per_monitor_desktop: true, lock_screen: true, per_monitor_lock: true, read_current: true }
+    fn connect() -> Result<Self> {
+        Ok(Self)
     }
 
     fn monitors(&self) -> Result<Vec<Monitor>> {
         kscreen::detect()
     }
+}
 
-    fn current_desktop(&self, monitors: &[Monitor]) -> Result<Images> {
-        shell::current_desktop(monitors)
+impl SetOne<Desktop> for Plasma {
+    fn set_one(&self, image: &Path, monitors: &[Monitor]) -> Result<()> {
+        let images = monitors.iter().map(|m| (m.name.clone(), image.to_path_buf())).collect();
+        shell::apply_desktop(&images, monitors)
     }
+}
 
-    fn set_desktop(&self, images: &Images, monitors: &[Monitor]) -> Result<()> {
+impl SetEach<Desktop> for Plasma {
+    fn set_each(&self, images: &Images, monitors: &[Monitor]) -> Result<()> {
         shell::apply_desktop(images, monitors)
     }
+}
 
-    fn current_lock(&self, monitors: &[Monitor]) -> Result<Images> {
-        shell::current_lock(monitors)
+impl ReadBack<Desktop> for Plasma {
+    fn current(&self, monitors: &[Monitor]) -> Result<Images> {
+        shell::current_desktop(monitors)
     }
+}
 
-    fn set_lock(&self, images: &Images, monitors: &[Monitor], mode: LockMode) -> Result<()> {
-        match mode {
-            LockMode::PerMonitor => shell::apply_lock_per_monitor(images, monitors),
-            LockMode::Single => match primary_image(images, monitors) {
-                Some(path) => shell::apply_lock_single(path),
-                None => anyhow::bail!("nothing assigned to any monitor"),
-            },
-        }
+/// One image uses Plasma's stock image plugin; per monitor uses ours.
+impl SetOne<Lock> for Plasma {
+    fn set_one(&self, image: &Path, _monitors: &[Monitor]) -> Result<()> {
+        shell::apply_lock_single(image)
+    }
+}
+
+impl SetEach<Lock> for Plasma {
+    fn set_each(&self, images: &Images, monitors: &[Monitor]) -> Result<()> {
+        shell::apply_lock_per_monitor(images, monitors)
+    }
+}
+
+impl ReadBack<Lock> for Plasma {
+    fn current(&self, monitors: &[Monitor]) -> Result<Images> {
+        shell::current_lock(monitors)
     }
 }

@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use anyhow::Context as _;
 use gpui_kit::component::h_flex;
 use gpui_kit::*;
 
@@ -91,7 +92,8 @@ impl Muralist {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    let restore = backend.current_desktop(&monitors)?;
+                    let desktop = backend.desktop().context("no desktop backend")?;
+                    let restore = desktop.current(&monitors).transpose()?.unwrap_or_default();
                     let map: BTreeMap<String, PathBuf> = match source {
                         PeekSource::Map(map) => map,
                         PeekSource::Image { path, span: true } => {
@@ -101,7 +103,7 @@ impl Muralist {
                             monitors.iter().map(|m| (m.name.clone(), path.clone())).collect()
                         }
                     };
-                    backend.set_desktop(&map, &monitors)?;
+                    desktop.set(&map, &monitors)?;
                     anyhow::Ok(restore)
                 })
                 .await;
@@ -148,7 +150,10 @@ impl Muralist {
         let monitors = self.monitors.clone();
         let backend = self.backend.clone();
         cx.spawn(async move |this, cx| {
-            let result = cx.background_executor().spawn(async move { backend.set_desktop(&restore, &monitors) }).await;
+            let result = cx
+                .background_executor()
+                .spawn(async move { backend.desktop().context("no desktop backend")?.set(&restore, &monitors) })
+                .await;
             if let Err(e) = result {
                 this.update(cx, |this, cx| this.set_status(format!("Restoring after peek failed: {e:#}"), true, cx))
                     .ok();

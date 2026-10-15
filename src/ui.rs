@@ -21,6 +21,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
+use anyhow::Context as _;
 use futures::StreamExt as _;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::spinner::Spinner;
@@ -29,7 +30,7 @@ use gpui_kit::component::{Icon, Sizable as _, Theme, ThemeTokens, h_flex, v_flex
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::backend::{self, Capabilities, SharedBackend};
+use crate::backend::{Reach, Session};
 use crate::config::{Config, FilterOverrides, GridMode, LockMode, State, cache_dir};
 use crate::monitors::Monitor;
 use crate::span;
@@ -752,8 +753,7 @@ fn is_image(path: &Path) -> bool {
 pub struct Muralist {
     cfg: Config,
     /// The desktop integration (see `crate::backend`).
-    backend: SharedBackend,
-    caps: Capabilities,
+    backend: Arc<Session>,
     client: Client,
     monitors: Vec<Monitor>,
     account: Option<UserSettings>,
@@ -883,8 +883,7 @@ impl Muralist {
         let mut status: SharedString = "Ready".into();
         let mut status_error = false;
 
-        let backend = backend::detect();
-        let caps = backend.capabilities();
+        let backend = Arc::new(Session::detect());
         if !backend.is_supported() {
             status = format!("muralist doesn't support {} yet", backend.name()).into();
             status_error = true;
@@ -896,16 +895,14 @@ impl Muralist {
         });
 
         let mut applied = State::load();
-        if caps.read_current {
-            if let Ok(current) = backend.current_desktop(&monitors) {
-                if !current.is_empty() {
-                    applied.desktop = current;
-                }
+        if let Some(Ok(current)) = backend.desktop().and_then(|w| w.current(&monitors)) {
+            if !current.is_empty() {
+                applied.desktop = current;
             }
-            if let Ok(current) = backend.current_lock(&monitors) {
-                if !current.is_empty() {
-                    applied.lock = current;
-                }
+        }
+        if let Some(Ok(current)) = backend.lock().and_then(|w| w.current(&monitors)) {
+            if !current.is_empty() {
+                applied.lock = current;
             }
         }
 
@@ -963,7 +960,6 @@ impl Muralist {
         main_focus.focus(window, cx);
         let mut this = Self {
             backend,
-            caps,
             client,
             monitors,
             account: None,
@@ -1857,8 +1853,12 @@ impl Muralist {
                     let mut done = Vec::new();
                     for (target, images) in jobs {
                         match target {
-                            Target::Desktop => backend.set_desktop(&images, &monitors)?,
-                            Target::Lock => backend.set_lock(&images, &monitors, lock_mode)?,
+                            Target::Desktop => {
+                                backend.desktop().context("no desktop backend")?.set(&images, &monitors)?
+                            }
+                            Target::Lock => {
+                                backend.lock().context("no lock screen")?.apply(&images, &monitors, lock_mode)?
+                            }
                         }
                         done.push((target, images));
                     }
@@ -3391,11 +3391,12 @@ impl Muralist {
 
     fn render_displays(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let p = pal();
-        if !self.caps.lock_screen {
+        let lock_reach = self.backend.lock().map(|w| w.reach());
+        if lock_reach.is_none() {
             self.target = TargetMode::Desktop;
         }
-        let lock_ok = self.caps.lock_screen;
-        let lock_style_ok = self.caps.per_monitor_lock;
+        let lock_ok = lock_reach.is_some();
+        let lock_style_ok = lock_reach == Some(Reach::PerMonitor);
         if !self.backend.is_supported() {
             return v_flex()
                 .gap_2()
@@ -4003,7 +4004,7 @@ impl Muralist {
                         cx.notify();
                     })),
                 )
-                .when(self.caps.lock_screen, |d| {
+                .when(self.backend.lock().is_some(), |d| {
                     d.child(
                         toggle_row(
                             "rot-lock",
@@ -4155,7 +4156,7 @@ impl Muralist {
                         .child(appearance)
                         .child(rotation)
                         .child(downloads)
-                        .when(self.caps.per_monitor_lock, |d| d.child(lock))
+                        .when(self.backend.lock().is_some_and(|w| w.reach() == Reach::PerMonitor), |d| d.child(lock))
                         .child(data),
                 ),
             )
