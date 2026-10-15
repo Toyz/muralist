@@ -419,6 +419,31 @@ impl Muralist {
                 .child(div().text_xs().text_color(p.dim).child(sub))
         };
         let remote = matches!(item, Item::Remote(_));
+
+        // Pick a screen: the same desk as the stage, small, right here.
+        let targets = self.target.targets();
+        let avail = super::DETAILS_W - CARD_PAD * 2.;
+        let per_w = (avail - 12. * (targets.len() as f32 - 1.)) / targets.len() as f32;
+        let layouts: Vec<AnyElement> = if supported {
+            targets
+                .iter()
+                .map(|&t| {
+                    let layout = self.render_layout(t, per_w, 74., cx);
+                    v_flex()
+                        .items_center()
+                        .gap_1()
+                        .when(targets.len() > 1, |d| d.child(div().text_xs().text_color(p.dim).child(t.label())))
+                        .child(layout)
+                        .into_any_element()
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let changes = self.pending_changes();
+        let fetching = self.landing.len();
+        let busy = self.busy > 0;
+
         v_flex()
             .gap_3()
             .p(px(CARD_PAD))
@@ -430,6 +455,33 @@ impl Muralist {
             .child(div().text_xs().text_color(p.dim).child(format!("On all {n} screens of {where_to}, straight away.")))
             .when(supported, |d| {
                 d.child(
+                    v_flex()
+                        .gap_2()
+                        .pt_1()
+                        .child(
+                            h_flex()
+                                .justify_between()
+                                .child(div().text_sm().font_weight(FontWeight::MEDIUM).child("Pick a screen"))
+                                .child(div().text_xs().text_color(p.dim).child("click to stage it there")),
+                        )
+                        .child(h_flex().justify_center().gap_3().children(layouts)),
+                )
+                .when(changes > 0 || busy, |d| {
+                    d.child(
+                        kit::Btn::new("use-apply")
+                            .label(if fetching > 0 {
+                                format!("Fetching {fetching}")
+                            } else {
+                                format!("Apply {changes} change{}", if changes == 1 { "" } else { "s" })
+                            })
+                            .icon("check")
+                            .primary()
+                            .full()
+                            .loading(busy)
+                            .on_click(cx.listener(|this, _, _, cx| this.apply(this.target.targets(), cx))),
+                    )
+                })
+                .child(
                     h_flex()
                         .gap_2()
                         .child(tile("fill-all", "layout-dashboard", "Stage on all", "Review before applying").on_click(
@@ -439,14 +491,6 @@ impl Muralist {
                             tile("span", "frame", "Span", "One image across all")
                                 .on_click(cx.listener(|this, _, _, cx| this.open_span_editor(cx))),
                         ),
-                )
-                .child(
-                    h_flex()
-                        .gap_2()
-                        .text_xs()
-                        .text_color(p.dim)
-                        .child(icon("mouse-pointer-click").size_3p5())
-                        .child("Or click a screen below, or drag the card onto one."),
                 )
             })
             .when(remote, |d| {
