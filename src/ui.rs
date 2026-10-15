@@ -3080,7 +3080,8 @@ impl Muralist {
             .on_mouse_down(MouseButton::Right, {
                 let item = item.clone();
                 cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
-                    this.open_context(item.clone(), ev.position, cx);
+                    let origin = this.card_bounds.borrow().get(&ix).copied();
+                    this.open_context(item.clone(), ev.position, origin, cx);
                     cx.stop_propagation();
                 })
             })
