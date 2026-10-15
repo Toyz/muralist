@@ -3986,6 +3986,18 @@ impl Muralist {
                             .render()
                     }))
                     .child(
+                        kit::Btn::new("pv-compose")
+                            .icon("crop")
+                            .ghost()
+                            .sm()
+                            .tooltip("Compose: frame each screen, turn, mirror")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.open_composer(span_editor::ComposeMode::Each, cx)
+                            }))
+                            .render(),
+                    )
+                    .child(
                         kit::Btn::new("pv-full")
                             .icon("maximize")
                             .ghost()

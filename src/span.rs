@@ -19,18 +19,136 @@ pub struct Crop {
     pub h: u32,
 }
 
+/// Which way up the picture goes: quarter turns clockwise, then mirrored
+/// left to right. Together they reach all eight orientations (an upside-
+/// down flip is a half turn mirrored).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Orient {
+    pub turns: u8,
+    pub mirror: bool,
+}
+
+impl Orient {
+    pub fn rotated_cw(self) -> Self {
+        Self { turns: (self.turns + 1) % 4, ..self }
+    }
+
+    pub fn rotated_ccw(self) -> Self {
+        Self { turns: (self.turns + 3) % 4, ..self }
+    }
+
+    /// Mirrored left to right, as seen.
+    pub fn mirrored(self) -> Self {
+        Self { mirror: !self.mirror, ..self }
+    }
+
+    /// Flipped upside down, as seen.
+    pub fn flipped(self) -> Self {
+        Self { turns: (self.turns + 2) % 4, mirror: !self.mirror }
+    }
+
+    /// The picture's size once turned.
+    pub fn dims(self, (w, h): (u32, u32)) -> (u32, u32) {
+        if self.turns % 2 == 1 { (h, w) } else { (w, h) }
+    }
+
+    pub fn apply(self, img: image::DynamicImage) -> image::DynamicImage {
+        let img = match self.turns % 4 {
+            1 => img.rotate90(),
+            2 => img.rotate180(),
+            3 => img.rotate270(),
+            _ => img,
+        };
+        if self.mirror { img.fliph() } else { img }
+    }
+}
+
 /// How the image sits behind the monitors: `zoom` >= 1 beyond the minimum
-/// cover scale, `pan` in -1..1 per axis across the spare image (0 = centered).
+/// cover scale, `pan` in -1..1 per axis across the spare image (0 = centered),
+/// and which way up it goes.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Framing {
     pub zoom: f32,
     pub pan: (f32, f32),
+    pub orient: Orient,
 }
 
 impl Default for Framing {
     fn default() -> Self {
-        Self { zoom: 1., pan: (0., 0.) }
+        Self { zoom: 1., pan: (0., 0.), orient: Orient::default() }
     }
+}
+
+impl Framing {
+    /// A file-name tag naming this framing (empty for the default), since
+    /// desktops won't reload an image whose path they already show.
+    fn tag(self) -> String {
+        if self == Framing::default() {
+            return String::new();
+        }
+        let o = self.orient;
+        format!(
+            "-z{:.0}x{:.0}y{:.0}r{}{}",
+            self.zoom * 100.,
+            self.pan.0 * 100.,
+            self.pan.1 * 100.,
+            o.turns,
+            if o.mirror { "m" } else { "" }
+        )
+    }
+}
+
+/// An output name kept to safe characters for a file name.
+fn safe_name(name: &str) -> String {
+    name.chars().map(|ch| if ch.is_ascii_alphanumeric() || ch == '-' { ch } else { '_' }).collect()
+}
+
+/// Cuts `crop` out of `img`, sizes it for `m` and writes it to `dest`.
+fn write_part(img: &image::DynamicImage, crop: Crop, m: &Monitor, dest: &Path) -> Result<()> {
+    let part = img
+        .crop_imm(crop.x, crop.y, crop.w, crop.h)
+        .resize_exact(m.px_width, m.px_height, FilterType::Lanczos3)
+        .to_rgb8();
+    let mut bytes = Vec::new();
+    JpegEncoder::new_with_quality(&mut bytes, 94).encode_image(&part)?;
+    crate::store::write_atomic(dest, &bytes).with_context(|| format!("writing {}", dest.display()))
+}
+
+/// Each monitor framed on its own: its own zoom, pan and orientation of the
+/// same picture, each covering just that screen. Monitors without a framing
+/// get the default. Returns output name -> file.
+pub fn frame_each(
+    src: &Path,
+    monitors: &[Monitor],
+    framings: &BTreeMap<String, Framing>,
+    out_dir: &Path,
+) -> Result<BTreeMap<String, PathBuf>> {
+    if monitors.is_empty() {
+        bail!("no monitors to frame");
+    }
+    let img = image::open(src).with_context(|| format!("opening {}", src.display()))?;
+    let stem = src.file_stem().map_or_else(|| "frame".into(), |s| s.to_string_lossy().into_owned());
+    let parts: Vec<Result<(String, PathBuf)>> = std::thread::scope(|scope| {
+        let workers: Vec<_> = monitors
+            .iter()
+            .map(|m| {
+                let (img, stem) = (&img, &stem);
+                let framing = framings.get(&m.name).copied().unwrap_or_default();
+                scope.spawn(move || -> Result<(String, PathBuf)> {
+                    let turned = framing.orient.apply(img.clone());
+                    let crop = crops_framed(turned.width(), turned.height(), std::slice::from_ref(m), framing)[0];
+                    let dest = out_dir.join(format!("{stem}-frame{}-{}.jpg", framing.tag(), safe_name(&m.name)));
+                    write_part(&turned, crop, m, &dest)?;
+                    Ok((m.name.clone(), dest))
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            .map(|w| w.join().unwrap_or_else(|_| Err(anyhow::anyhow!("framing worker panicked"))))
+            .collect()
+    });
+    parts.into_iter().collect()
 }
 
 /// Geometry of a framing in desktop (logical) units: image scale (units per
@@ -92,17 +210,10 @@ pub fn slice_framed(
     if monitors.is_empty() {
         bail!("no monitors to span across");
     }
-    let img = image::open(src).with_context(|| format!("opening {}", src.display()))?;
+    let img = framing.orient.apply(image::open(src).with_context(|| format!("opening {}", src.display()))?);
     fs::create_dir_all(out_dir)?;
     let stem = src.file_stem().map_or_else(|| "span".into(), |s| s.to_string_lossy().into_owned());
-
-    // Distinct names per framing: desktops (Plasma, for one) won't reload an image whose path
-    // it already shows.
-    let tag = if framing == Framing::default() {
-        String::new()
-    } else {
-        format!("-z{:.0}x{:.0}y{:.0}", framing.zoom * 100., framing.pan.0 * 100., framing.pan.1 * 100.)
-    };
+    let tag = framing.tag();
     // Each slice is a big resize and encode of its own: one thread each.
     let crops = crops_framed(img.width(), img.height(), monitors, framing);
     let slices: Vec<Result<(String, PathBuf)>> = std::thread::scope(|scope| {
@@ -112,20 +223,8 @@ pub fn slice_framed(
             .map(|(m, c)| {
                 let (img, stem, tag) = (&img, &stem, &tag);
                 scope.spawn(move || -> Result<(String, PathBuf)> {
-                    let part = img
-                        .crop_imm(c.x, c.y, c.w, c.h)
-                        .resize_exact(m.px_width, m.px_height, FilterType::Lanczos3)
-                        .to_rgb8();
-                    // Output names come from the system; keep them to safe characters.
-                    let name: String = m
-                        .name
-                        .chars()
-                        .map(|ch| if ch.is_ascii_alphanumeric() || ch == '-' { ch } else { '_' })
-                        .collect();
-                    let dest = out_dir.join(format!("{stem}-span{tag}-{name}.jpg"));
-                    let mut bytes = Vec::new();
-                    JpegEncoder::new_with_quality(&mut bytes, 94).encode_image(&part)?;
-                    crate::store::write_atomic(&dest, &bytes).with_context(|| format!("writing {}", dest.display()))?;
+                    let dest = out_dir.join(format!("{stem}-span{tag}-{}.jpg", safe_name(&m.name)));
+                    write_part(img, c, m, &dest)?;
                     Ok((m.name.clone(), dest))
                 })
             })
@@ -166,8 +265,8 @@ mod tests {
     fn pan_slides_the_window_to_the_edges() {
         let ms = [mon("DP-1", 0), mon("DP-2", 2560), mon("DP-3", 5120)];
         // 7680x2880 is twice as tall as needed: pan -1 takes the top, +1 the bottom.
-        let top = crops_framed(7680, 2880, &ms, Framing { zoom: 1., pan: (0., -1.) });
-        let bottom = crops_framed(7680, 2880, &ms, Framing { zoom: 1., pan: (0., 1.) });
+        let top = crops_framed(7680, 2880, &ms, Framing { zoom: 1., pan: (0., -1.), ..Framing::default() });
+        let bottom = crops_framed(7680, 2880, &ms, Framing { zoom: 1., pan: (0., 1.), ..Framing::default() });
         assert_eq!(top[0].y, 0);
         assert_eq!(bottom[0].y + bottom[0].h, 2880);
     }
@@ -176,7 +275,7 @@ mod tests {
     fn zoom_shrinks_the_source_region() {
         let ms = [mon("DP-1", 0), mon("DP-2", 2560), mon("DP-3", 5120)];
         let plain = crops_framed(7680, 1440, &ms, Framing::default());
-        let zoomed = crops_framed(7680, 1440, &ms, Framing { zoom: 2., pan: (0., 0.) });
+        let zoomed = crops_framed(7680, 1440, &ms, Framing { zoom: 2., pan: (0., 0.), ..Framing::default() });
         assert_eq!(zoomed[1].w * 2, plain[1].w);
     }
 
@@ -191,5 +290,34 @@ mod tests {
         assert_eq!(c[0].y, ((1440.0 * s - 1440.0) / 2.0 / s) as u32);
         assert_eq!(c[0].x + c[0].w, c[1].x);
         assert_eq!(c[2].x + c[2].w, 5120);
+    }
+
+    #[test]
+    fn each_screen_is_framed_and_turned_on_its_own() {
+        let dir = std::env::temp_dir().join(format!("muralist-frame-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        // Left half red, right half blue.
+        let src = dir.join("src.png");
+        image::RgbImage::from_fn(
+            400,
+            200,
+            |x, _| if x < 200 { image::Rgb([255, 0, 0]) } else { image::Rgb([0, 0, 255]) },
+        )
+        .save(&src)
+        .unwrap();
+        let mut a = mon("A", 0);
+        let mut b = mon("B", 100);
+        for m in [&mut a, &mut b] {
+            (m.width, m.height, m.px_width, m.px_height) = (100, 100, 20, 20);
+        }
+        let left = Framing { pan: (-1., 0.), ..Framing::default() };
+        let mirrored = Framing { orient: Orient::default().mirrored(), ..left };
+        let framings = BTreeMap::from([("A".to_owned(), left), ("B".to_owned(), mirrored)]);
+        let out = frame_each(&src, &[a, b], &framings, &dir).unwrap();
+        let pixel = |name: &str| image::open(&out[name]).unwrap().to_rgb8().get_pixel(10, 10).0;
+        assert!(pixel("A")[0] > 200 && pixel("A")[2] < 60, "the left edge is red");
+        assert!(pixel("B")[2] > 200 && pixel("B")[0] < 60, "mirrored, the left edge is blue");
+        let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -1,38 +1,104 @@
-//! Frame a span: the monitors at true proportions with bezel gaps, the image
-//! behind them. Drag to slide it, scroll to zoom; what falls outside the
-//! screens is shown dimmed so you can see what gets cut.
+//! The composer: frame a wallpaper on your real desk. Each screen on its
+//! own (click one, then drag to move it, scroll to zoom, turn or mirror it),
+//! or one picture spanned across them all. The monitors sit at true
+//! proportions with bezel gaps; around the screen being framed the rest of
+//! the picture shows dimmed, so you can see what gets cut.
 
-use std::path::PathBuf;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::{BtnKind, Item, Muralist, Target, button, icon, icon_button, pal, with_alpha};
+use super::{
+    BtnKind, Item, Muralist, Target, button, icon, icon_button, kit, pal, segment, segmented_track, with_alpha,
+};
 use crate::config::cache_dir;
-use crate::span::{self, Framing};
+use crate::span::{self, Framing, Orient};
+use crate::thumbs::Job;
 
 /// Room around the desktop where overhanging image shows, dimmed.
 const MARGIN: f32 = 44.;
 const MAX_ZOOM: f32 = 4.;
+const GAP: f32 = 6.;
+
+/// Framing each screen on its own, or one picture across them all.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum ComposeMode {
+    Each,
+    Span,
+}
 
 pub(super) struct SpanEdit {
     item: Item,
     dims: (u32, u32),
-    framing: Framing,
+    mode: ComposeMode,
+    span: Framing,
+    screens: BTreeMap<String, Framing>,
+    /// The screen being framed in Each mode.
+    active: String,
     targets: Vec<Target>,
     drag: Option<Point<Pixels>>,
 }
 
+impl SpanEdit {
+    /// The framing the tools act on: the active screen's, or the span's.
+    fn framing_mut(&mut self) -> &mut Framing {
+        match self.mode {
+            ComposeMode::Span => &mut self.span,
+            ComposeMode::Each => self.screens.entry(self.active.clone()).or_default(),
+        }
+    }
+
+    fn framing(&self) -> Framing {
+        match self.mode {
+            ComposeMode::Span => self.span,
+            ComposeMode::Each => self.screens.get(&self.active).copied().unwrap_or_default(),
+        }
+    }
+}
+
+/// `framing` with its pan moved by a drag of (`dx`, `dy`) desktop units, for
+/// a picture `dims` covering a box `bw` x `bh`.
+fn dragged(framing: Framing, dims: (u32, u32), bw: f64, bh: f64, dx: f64, dy: f64) -> Framing {
+    let (s, off_x, off_y) = span::layout(dims.0, dims.1, bw, bh, framing);
+    let slack_x = (f64::from(dims.0) * s - bw).max(0.);
+    let slack_y = (f64::from(dims.1) * s - bh).max(0.);
+    // Dragging right reveals more of the left: the overhang shrinks.
+    let new_x = (off_x - dx).clamp(0., slack_x);
+    let new_y = (off_y - dy).clamp(0., slack_y);
+    let to_pan = |off: f64, slack: f64| if slack > 0. { (off / (slack / 2.) - 1.) as f32 } else { 0. };
+    Framing { pan: (to_pan(new_x, slack_x), to_pan(new_y, slack_y)), ..framing }
+}
+
 impl Muralist {
+    /// Opens the composer on one picture across every screen.
     pub(super) fn open_span_editor(&mut self, cx: &mut Context<Self>) {
+        self.open_composer(ComposeMode::Span, cx);
+    }
+
+    /// Opens the composer, framing each screen or spanning them.
+    pub(super) fn open_composer(&mut self, mode: ComposeMode, cx: &mut Context<Self>) {
         let (Some(item), Some(dims)) = (self.selected.clone(), self.selected_dims) else {
             // Unknown size: fall back to a centered span.
             self.assign(self.target.targets(), super::Placement::Span, cx);
             return;
         };
-        self.span_edit =
-            Some(SpanEdit { item, dims, framing: Framing::default(), targets: self.target.targets(), drag: None });
+        let mut order: Vec<_> = self.monitors.iter().collect();
+        order.sort_by_key(|m| (!m.primary, m.x));
+        let active = order.first().map(|m| m.name.clone()).unwrap_or_default();
+        let mode = if self.monitors.len() < 2 { ComposeMode::Each } else { mode };
+        self.span_edit = Some(SpanEdit {
+            item,
+            dims,
+            mode,
+            span: Framing::default(),
+            screens: BTreeMap::new(),
+            active,
+            targets: self.target.targets(),
+            drag: None,
+        });
         cx.notify();
     }
 
@@ -45,24 +111,36 @@ impl Muralist {
     fn editor_scale(&self) -> f32 {
         let (_, _, bw, bh) = self.desktop_box();
         let avail_w = (self.viewport.0 - 220.).max(300.);
-        let avail_h = (self.viewport.1 - 330.).max(160.);
+        let avail_h = (self.viewport.1 - 360.).max(160.);
         (avail_w / bw as f32).min(avail_h / bh as f32)
     }
 
     fn span_drag(&mut self, pos: Point<Pixels>, cx: &mut Context<Self>) {
         let k = f64::from(self.editor_scale());
         let (_, _, bw, bh) = self.desktop_box();
+        let monitors = self.monitors.clone();
         let Some(edit) = &mut self.span_edit else { return };
         let Some(last) = edit.drag else { return };
-        let (s, off_x, off_y) = span::layout(edit.dims.0, edit.dims.1, bw, bh, edit.framing);
-        let slack_x = (f64::from(edit.dims.0) * s - bw).max(0.);
-        let slack_y = (f64::from(edit.dims.1) * s - bh).max(0.);
-        // Dragging right reveals more of the left: overhang shrinks.
-        let new_x = (off_x - f64::from(f32::from(pos.x - last.x)) / k).clamp(0., slack_x);
-        let new_y = (off_y - f64::from(f32::from(pos.y - last.y)) / k).clamp(0., slack_y);
-        let to_pan = |off: f64, slack: f64| if slack > 0. { (off / (slack / 2.) - 1.) as f32 } else { 0. };
-        edit.framing.pan = (to_pan(new_x, slack_x), to_pan(new_y, slack_y));
+        let (dx, dy) = (f64::from(f32::from(pos.x - last.x)) / k, f64::from(f32::from(pos.y - last.y)) / k);
+        let framing = edit.framing();
+        let dims = framing.orient.dims(edit.dims);
+        let moved = match edit.mode {
+            ComposeMode::Span => dragged(framing, dims, bw, bh, dx, dy),
+            ComposeMode::Each => {
+                let Some(m) = monitors.iter().find(|m| m.name == edit.active) else { return };
+                dragged(framing, dims, f64::from(m.width), f64::from(m.height), dx, dy)
+            }
+        };
+        *edit.framing_mut() = moved;
         edit.drag = Some(pos);
+        cx.notify();
+    }
+
+    /// Changes the framing being edited.
+    fn compose(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut Framing)) {
+        if let Some(edit) = &mut self.span_edit {
+            f(edit.framing_mut());
+        }
         cx.notify();
     }
 
@@ -71,17 +149,26 @@ impl Muralist {
         let client = self.client.clone();
         let dir = self.cfg.download_dir.clone();
         let monitors = self.monitors.clone();
-        let framing = edit.framing;
         let targets = edit.targets;
+        let (mode, span_framing, screens) = (edit.mode, edit.span, edit.screens);
         self.busy += 1;
-        self.set_status("Slicing across displays...", false, cx);
+        self.set_status(
+            if mode == ComposeMode::Span { "Slicing across displays..." } else { "Framing each screen..." },
+            false,
+            cx,
+        );
         let item = edit.item;
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
                 .spawn(async move {
                     let path = Muralist::fetch(&client, &dir, item)?;
-                    span::slice_framed(&path, &monitors, &cache_dir().join("span"), framing)
+                    match mode {
+                        ComposeMode::Span => {
+                            span::slice_framed(&path, &monitors, &cache_dir().join("span"), span_framing)
+                        }
+                        ComposeMode::Each => span::frame_each(&path, &monitors, &screens, &cache_dir().join("span")),
+                    }
                 })
                 .await;
             this.update(cx, |this, cx| {
@@ -94,9 +181,9 @@ impl Muralist {
                                 Target::Lock => this.lock.extend(map.clone()),
                             }
                         }
-                        this.set_status("Span staged. Press Apply to set it.", false, cx);
+                        this.set_status("Framed and staged. Press Apply to set it.", false, cx);
                     }
-                    Err(e) => this.set_status(format!("Span failed: {e:#}"), true, cx),
+                    Err(e) => this.set_status(format!("Framing failed: {e:#}"), true, cx),
                 }
             })
             .ok();
@@ -129,46 +216,93 @@ impl Muralist {
         }
     }
 
+    /// `base` turned the way `orient` says, rendered once per orientation.
+    fn oriented(&mut self, base: &Path, orient: Orient) -> Option<PathBuf> {
+        if orient == Orient::default() {
+            return Some(base.to_owned());
+        }
+        let key = format!("orient-{}{}-{}", orient.turns, u8::from(orient.mirror), base.display());
+        let path = base.to_owned();
+        self.thumb(key, |key| Job::Orient { key, path, orient })
+    }
+
     pub(super) fn render_span_editor(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let p = pal();
-        let (item, dims, framing) = {
+        let (item, dims, mode, span_framing, screens, active) = {
             let edit = self.span_edit.as_ref()?;
-            (edit.item.clone(), edit.dims, edit.framing)
+            (edit.item.clone(), edit.dims, edit.mode, edit.span, edit.screens.clone(), edit.active.clone())
         };
-        let image = self.editor_image(&item, cx);
+        let base = self.editor_image(&item, cx);
         let (min_x, min_y, bw, bh) = self.desktop_box();
         let k = self.editor_scale();
-        let (s, off_x, off_y) = span::layout(dims.0, dims.1, bw, bh, framing);
-        let img_w = (f64::from(dims.0) * s) as f32 * k;
-        let img_h = (f64::from(dims.1) * s) as f32 * k;
-        let img_left = MARGIN - off_x as f32 * k;
-        let img_top = MARGIN - off_y as f32 * k;
         let stage_w = bw as f32 * k + MARGIN * 2.;
         let stage_h = bh as f32 * k + MARGIN * 2.;
-        let gap = 6.;
-
-        let picture = |path: PathBuf, left: f32, top: f32| {
-            img(path).absolute().left(px(left)).top(px(top)).w(px(img_w)).h(px(img_h)).object_fit(ObjectFit::Fill)
+        let monitors = self.monitors.clone();
+        let accent = p.accent;
+        let picture = |path: PathBuf, left: f32, top: f32, w: f32, h: f32| {
+            img(path).absolute().left(px(left)).top(px(top)).w(px(w)).h(px(h)).object_fit(ObjectFit::Fill)
         };
 
-        // Each monitor is a window onto the same image at full brightness.
-        let windows: Vec<AnyElement> = self
-            .monitors
-            .clone()
-            .into_iter()
-            .map(|m| {
-                let left = MARGIN + (m.x - min_x) as f32 * k + gap / 2.;
-                let top = MARGIN + (m.y - min_y) as f32 * k + gap / 2.;
+        // Where the picture sits (left, top, width, height in stage pixels)
+        // for one framing over a box at (bx, by) of bw x bh desktop units.
+        let place = |framing: Framing, bx: f32, by: f32, w: f64, h: f64| {
+            let (ow, oh) = framing.orient.dims(dims);
+            let (s, off_x, off_y) = span::layout(ow, oh, w, h, framing);
+            (
+                bx - off_x as f32 * k,
+                by - off_y as f32 * k,
+                (f64::from(ow) * s) as f32 * k,
+                (f64::from(oh) * s) as f32 * k,
+            )
+        };
+
+        let mut backdrop: Option<AnyElement> = None;
+        let mut windows: Vec<AnyElement> = Vec::new();
+        let span_place = place(span_framing, MARGIN, MARGIN, bw, bh);
+        let span_image = base.as_ref().and_then(|b| self.oriented(b, span_framing.orient));
+        if mode == ComposeMode::Span
+            && let Some(path) = span_image.clone()
+        {
+            // The whole image, dimmed: everything outside the screens gets cut.
+            let (l, t, w, h) = span_place;
+            backdrop = Some(picture(path, l, t, w, h).opacity(0.22).into_any_element());
+        }
+        for m in &monitors {
+            let mx = MARGIN + (m.x - min_x) as f32 * k;
+            let my = MARGIN + (m.y - min_y) as f32 * k;
+            let (left, top) = (mx + GAP / 2., my + GAP / 2.);
+            let is_active = mode == ComposeMode::Each && m.name == active;
+            // Each screen shows its own framing, or its slice of the span.
+            let (framing, (l, t, w, h)) = match mode {
+                ComposeMode::Span => (span_framing, span_place),
+                ComposeMode::Each => {
+                    let f = screens.get(&m.name).copied().unwrap_or_default();
+                    (f, place(f, mx, my, f64::from(m.width), f64::from(m.height)))
+                }
+            };
+            let image = match mode {
+                ComposeMode::Span => span_image.clone(),
+                ComposeMode::Each => base.as_ref().and_then(|b| self.oriented(b, framing.orient)),
+            };
+            if is_active && let Some(path) = image.clone() {
+                backdrop = Some(picture(path, l, t, w, h).opacity(0.22).into_any_element());
+            }
+            let name = m.name.clone();
+            windows.push(
                 div()
+                    .id(SharedString::from(format!("compose-{}", m.name)))
                     .absolute()
                     .left(px(left))
                     .top(px(top))
-                    .w(px(m.width as f32 * k - gap))
-                    .h(px(m.height as f32 * k - gap))
+                    .w(px(m.width as f32 * k - GAP))
+                    .h(px(m.height as f32 * k - GAP))
                     .overflow_hidden()
-                    .border_1()
-                    .border_color(hsla(0., 0., 1., 0.35))
-                    .when_some(image.clone(), |d, path| d.child(picture(path, img_left - left, img_top - top)))
+                    .when_some(image, |d, path| d.child(picture(path, l - left, t - top, w, h)))
+                    .child(div().absolute().inset_0().border_2().border_color(if is_active {
+                        accent
+                    } else {
+                        hsla(0., 0., 1., if mode == ComposeMode::Each { 0.25 } else { 0.35 })
+                    }))
                     .child(
                         div()
                             .absolute()
@@ -176,15 +310,27 @@ impl Muralist {
                             .left_1()
                             .px_1p5()
                             .rounded_md()
-                            .bg(hsla(0., 0., 0., 0.6))
+                            .bg(if is_active { accent } else { hsla(0., 0., 0., 0.6) })
                             .text_xs()
                             .text_color(white())
-                            .child(m.name),
+                            .child(m.name.clone()),
                     )
-                    .into_any_element()
-            })
-            .collect();
+                    .when(mode == ComposeMode::Each, |d| {
+                        d.cursor_pointer().on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _, _, cx| {
+                                if let Some(edit) = &mut this.span_edit {
+                                    edit.active = name.clone();
+                                }
+                                cx.notify();
+                            }),
+                        )
+                    })
+                    .into_any_element(),
+            );
+        }
 
+        let dragging = self.span_edit.as_ref().is_some_and(|e| e.drag.is_some());
         let stage = div()
             .id("span-stage")
             .relative()
@@ -193,22 +339,14 @@ impl Muralist {
             .overflow_hidden()
             .rounded_xl()
             .bg(hsla(0., 0., 0., 0.5))
-            .cursor(if self.span_edit.as_ref().is_some_and(|e| e.drag.is_some()) {
-                CursorStyle::ClosedHand
-            } else {
-                CursorStyle::OpenHand
-            })
-            // The whole image, dimmed: everything outside the screens gets cut.
-            .when_some(image, |d, path| d.child(picture(path, img_left, img_top).opacity(0.22)))
+            .cursor(if dragging { CursorStyle::ClosedHand } else { CursorStyle::OpenHand })
+            .children(backdrop)
             .children(windows)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, ev: &MouseDownEvent, _, cx| {
                     if ev.click_count >= 2 {
-                        if let Some(edit) = &mut this.span_edit {
-                            edit.framing = Framing::default();
-                        }
-                        cx.notify();
+                        this.compose(cx, |f| *f = Framing::default());
                         return;
                     }
                     if let Some(edit) = &mut this.span_edit {
@@ -234,12 +372,88 @@ impl Muralist {
             )
             .on_scroll_wheel(cx.listener(|this, ev: &ScrollWheelEvent, _, cx| {
                 let dy = f32::from(ev.delta.pixel_delta(px(20.)).y);
-                if let Some(edit) = &mut this.span_edit {
-                    edit.framing.zoom = (edit.framing.zoom * (1. + dy * 0.004)).clamp(1., MAX_ZOOM);
-                }
-                cx.notify();
+                this.compose(cx, |f| f.zoom = (f.zoom * (1. + dy * 0.004)).clamp(1., MAX_ZOOM));
             }));
 
+        // ---- the tools, acting on the screen (or span) being framed ----
+        let framing = self.span_edit.as_ref()?.framing();
+        let tool =
+            |id: &'static str, name: &'static str, tip: &'static str| kit::Btn::new(id).icon(name).ghost().tooltip(tip);
+        let mode_seg = |id: &'static str, label: &'static str, m: ComposeMode| {
+            segment(id, label, mode == m, p).px_3().on_click(cx.listener(move |this, _, _, cx| {
+                if let Some(edit) = &mut this.span_edit {
+                    edit.mode = m;
+                }
+                cx.notify();
+            }))
+        };
+        let modes = (monitors.len() > 1).then(|| {
+            segmented_track(p).child(mode_seg("compose-each", "Each screen", ComposeMode::Each)).child(mode_seg(
+                "compose-span",
+                "Span",
+                ComposeMode::Span,
+            ))
+        });
+        let tools = h_flex()
+            .gap_0p5()
+            .child(
+                tool("compose-ccw", "rotate-ccw", "Turn left")
+                    .on_click(cx.listener(|this, _, _, cx| this.compose(cx, |f| f.orient = f.orient.rotated_ccw()))),
+            )
+            .child(
+                tool("compose-cw", "rotate-cw", "Turn right")
+                    .on_click(cx.listener(|this, _, _, cx| this.compose(cx, |f| f.orient = f.orient.rotated_cw()))),
+            )
+            .child(
+                tool("compose-mirror", "flip-horizontal-2", "Mirror")
+                    .on_click(cx.listener(|this, _, _, cx| this.compose(cx, |f| f.orient = f.orient.mirrored()))),
+            )
+            .child(
+                tool("compose-flip", "flip-vertical-2", "Flip upside down")
+                    .on_click(cx.listener(|this, _, _, cx| this.compose(cx, |f| f.orient = f.orient.flipped()))),
+            )
+            .child(div().w(px(1.)).h(px(18.)).mx_1().bg(p.border_strong))
+            .child(
+                tool("compose-out", "zoom-out", "Zoom out")
+                    .on_click(cx.listener(|this, _, _, cx| this.compose(cx, |f| f.zoom = (f.zoom / 1.15).max(1.)))),
+            )
+            .child(
+                div()
+                    .w(px(44.))
+                    .text_xs()
+                    .text_color(p.muted)
+                    .flex()
+                    .justify_center()
+                    .child(format!("{:.0}%", framing.zoom * 100.)),
+            )
+            .child(
+                tool("compose-in", "zoom-in", "Zoom in").on_click(
+                    cx.listener(|this, _, _, cx| this.compose(cx, |f| f.zoom = (f.zoom * 1.15).min(MAX_ZOOM))),
+                ),
+            )
+            .child(
+                tool("compose-reset", "undo-2", "Reset")
+                    .on_click(cx.listener(|this, _, _, cx| this.compose(cx, |f| *f = Framing::default()))),
+            )
+            .when(mode == ComposeMode::Each && monitors.len() > 1, |d| {
+                d.child(tool("compose-all", "copy", "Use this framing on every screen").on_click(cx.listener(
+                    |this, _, _, cx| {
+                        let names: Vec<String> = this.monitors.iter().map(|m| m.name.clone()).collect();
+                        if let Some(edit) = &mut this.span_edit {
+                            let f = edit.framing();
+                            for n in names {
+                                edit.screens.insert(n, f);
+                            }
+                        }
+                        cx.notify();
+                    },
+                )))
+            });
+
+        let hint = match mode {
+            ComposeMode::Each => format!("Framing {active}  ·  click a screen  ·  drag to move  ·  scroll to zoom"),
+            ComposeMode::Span => "Drag to move  ·  scroll to zoom  ·  double-click to reset".to_owned(),
+        };
         let card = v_flex()
             .id("span-card")
             .rounded_xl()
@@ -255,15 +469,10 @@ impl Muralist {
                     .h(px(56.))
                     .border_b_1()
                     .border_color(p.border)
-                    .child(icon("frame").size_4().text_color(p.accent))
-                    .child(div().font_weight(FontWeight::SEMIBOLD).child("Frame the span"))
-                    .child(
-                        div()
-                            .flex_1()
-                            .text_xs()
-                            .text_color(p.dim)
-                            .child("Drag to move  ·  scroll to zoom  ·  double-click to reset"),
-                    )
+                    .child(icon("crop").size_4().text_color(accent))
+                    .child(div().font_weight(FontWeight::SEMIBOLD).child("Compose"))
+                    .children(modes)
+                    .child(div().flex_1().text_xs().text_color(p.dim).child(hint))
                     .child(icon_button("span-close", "close", p).on_click(cx.listener(|this, _, _, cx| {
                         this.span_edit = None;
                         cx.notify();
@@ -271,27 +480,25 @@ impl Muralist {
             )
             .child(div().p_6().child(stage))
             .child(
-                h_flex()
-                    .justify_between()
-                    .px_6()
-                    .h(px(64.))
-                    .border_t_1()
-                    .border_color(p.border)
-                    .child(div().text_xs().text_color(p.dim).child(format!("Zoom {:.0}%", framing.zoom * 100.)))
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .child(button("span-cancel", "Cancel", BtnKind::Secondary, p).on_click(cx.listener(
-                                |this, _, _, cx| {
-                                    this.span_edit = None;
-                                    cx.notify();
-                                },
-                            )))
-                            .child(
-                                button("span-commit", "Span it", BtnKind::Primary, p)
-                                    .on_click(cx.listener(|this, _, _, cx| this.commit_span(cx))),
-                            ),
-                    ),
+                h_flex().justify_between().px_6().h(px(64.)).border_t_1().border_color(p.border).child(tools).child(
+                    h_flex()
+                        .gap_2()
+                        .child(button("span-cancel", "Cancel", BtnKind::Secondary, p).on_click(cx.listener(
+                            |this, _, _, cx| {
+                                this.span_edit = None;
+                                cx.notify();
+                            },
+                        )))
+                        .child(
+                            button(
+                                "span-commit",
+                                if mode == ComposeMode::Span { "Span it" } else { "Set framed" },
+                                BtnKind::Primary,
+                                p,
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| this.commit_span(cx))),
+                        ),
+                ),
             );
 
         Some(
@@ -316,5 +523,28 @@ impl Muralist {
                 .child(card)
                 .into_any_element(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::dragged;
+    use crate::span::{Framing, Orient};
+
+    #[test]
+    fn dragging_moves_within_the_spare_picture() {
+        // A 2:1 picture on a 1:1 box has spare width only.
+        let f = dragged(Framing::default(), (2000, 1000), 100., 100., 1000., 1000.);
+        assert_eq!(f.pan.1, 0.);
+        assert!((f.pan.0 - -1.).abs() < 1e-6, "dragged fully right shows the left edge");
+    }
+
+    #[test]
+    fn orientations_compose() {
+        let o = Orient::default();
+        assert_eq!(o.rotated_cw().rotated_ccw(), o);
+        assert_eq!(o.flipped().flipped(), o);
+        assert_eq!(o.mirrored().mirrored(), o);
+        assert_eq!(o.rotated_cw().dims((1920, 1080)), (1080, 1920));
     }
 }

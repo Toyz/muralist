@@ -1175,8 +1175,10 @@ impl Muralist {
             .items_center()
             .gap_1()
             .child(
-                tool("lb-span", "frame", "Span across displays")
-                    .on_click(cx.listener(|this, _, _, cx| this.open_span_editor(cx)))
+                tool("lb-compose", "crop", "Compose: frame each screen, turn, mirror, or span")
+                    .on_click(
+                        cx.listener(|this, _, _, cx| this.open_composer(super::span_editor::ComposeMode::Each, cx)),
+                    )
                     .render(),
             )
             .child(save_btn.render())

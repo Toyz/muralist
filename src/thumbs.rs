@@ -45,6 +45,13 @@ pub enum Job {
         key: String,
         path: PathBuf,
     },
+    /// `path` turned and mirrored, for the composer to show a picture the
+    /// way it's being framed (GPUI can't rotate an image itself).
+    Orient {
+        key: String,
+        path: PathBuf,
+        orient: crate::span::Orient,
+    },
     /// A coarse pixel mosaic, for spoiler-hidden cards.
     Pixelate {
         key: String,
@@ -68,6 +75,7 @@ impl Job {
             | Job::Fit { key, .. }
             | Job::Blur { key, .. }
             | Job::Pixelate { key, .. }
+            | Job::Orient { key, .. }
             | Job::XRay { key, .. } => key,
         }
     }
@@ -204,6 +212,19 @@ fn run(client: &Client, job: &Job) -> Result<PathBuf> {
             std::fs::create_dir_all(&dir)?;
             let fitted = image::open(path)?.resize(*w, *h, FilterType::CatmullRom).to_rgb8();
             save_jpeg(&dest, &fitted, 92)?;
+            Ok(dest)
+        }
+        Job::Orient { path, orient, .. } => {
+            let dest = dir.join(format!(
+                "orient-{}{}-{:016x}.jpg",
+                orient.turns,
+                if orient.mirror { "m" } else { "" },
+                path_hash(path)
+            ));
+            if let Some(hit) = reuse(&dest) {
+                return Ok(hit);
+            }
+            save_jpeg(&dest, &orient.apply(image::open(path)?).to_rgb8(), 90)?;
             Ok(dest)
         }
         Job::Local { path, .. } => {
