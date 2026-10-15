@@ -1,0 +1,17 @@
+{
+    "KPackageStructure": "Plasma/Wallpaper",
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "muralist"
+            }
+        ],
+        "Category": "",
+        "Description": "A different image on each monitor, managed by muralist",
+        "Icon": "preferences-desktop-wallpaper",
+        "Id": "dev.muralist.perscreen",
+        "License": "MIT",
+        "Name": "Per-monitor image (muralist)"
+    },
+    "X-KDE-ParentApp": "org.kde.plasmashell"
+}

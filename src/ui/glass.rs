@@ -1,0 +1,99 @@
+//! Side panels as frosted glass over the selected wallpaper, ambilight
+//! glows, and staggered entrances.
+
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use gpui_kit::*;
+
+use super::{Item, Muralist, Pal, adaptive, fade_in, local_key, with_alpha};
+use crate::thumbs::Job;
+
+/// Most vivid color of a palette, lifted into a glow.
+pub(super) fn glow_color(colors: &[Hsla]) -> Option<Hsla> {
+    let vivid = colors
+        .iter()
+        .copied()
+        .filter(|c| c.l > 0.08 && c.l < 0.95)
+        .max_by(|a, b| (a.s * (1. - (a.l - 0.5).abs())).total_cmp(&(b.s * (1. - (b.l - 0.5).abs()))))?;
+    Some(Hsla { h: vivid.h, s: vivid.s.max(0.45), l: 0.55, a: 1. })
+}
+
+/// Big soft colored shadow, like a TV's backlight.
+pub(super) fn ambilight(c: Hsla, blur: f32, alpha: f32) -> Vec<BoxShadow> {
+    vec![BoxShadow {
+        color: with_alpha(c, alpha),
+        offset: point(px(0.), px(blur * 0.2)),
+        blur_radius: px(blur),
+        spread_radius: px(-blur * 0.1),
+        inset: false,
+    }]
+}
+
+/// Layers to place first inside a panel: blurred wallpaper, then glass.
+pub(super) fn glass_layers(backdrop: Option<(PathBuf, String)>, panel: &str, p: Pal) -> Vec<AnyElement> {
+    let mut layers = Vec::new();
+    if let Some((path, key)) = backdrop {
+        layers.push(
+            fade_in(
+                SharedString::from(format!("glass-{panel}-{key}")),
+                img(path).size_full().object_fit(ObjectFit::Cover),
+            )
+            .into_any_element(),
+        );
+    }
+    layers.push(div().absolute().top_0().left_0().size_full().bg(with_alpha(p.surface, 0.8)).into_any_element());
+    // A faint sheen along the top, like light on glass.
+    layers.push(
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .right_0()
+            .h(px(220.))
+            .bg(linear_gradient(
+                180.,
+                linear_color_stop(hsla(0., 0., 1., 0.045), 0.),
+                linear_color_stop(hsla(0., 0., 1., 0.), 1.),
+            ))
+            .into_any_element(),
+    );
+    layers
+}
+
+/// Fade-and-rise entrance, delayed by `index` steps.
+pub(super) fn stagger(id: SharedString, index: usize, child: impl IntoElement) -> impl IntoElement {
+    let delay = index as f32 * 0.08;
+    let dur = 0.36;
+    div().child(child).with_animation(
+        id,
+        Animation::new(Duration::from_secs_f32(delay + dur))
+            .with_easing(move |t| ((t * (delay + dur) - delay) / dur).clamp(0., 1.)),
+        |d, t| {
+            let e = 1. - (1. - t).powi(3);
+            d.opacity(e).mt(px(14. * (1. - e)))
+        },
+    )
+}
+
+impl Muralist {
+    /// The blurred backdrop of the selection, once baked.
+    pub(super) fn backdrop(&mut self) -> Option<(PathBuf, String)> {
+        let item = self.selected.clone()?;
+        let (src, key) = match &item {
+            Item::Remote(w) => (self.remote_thumb(w, true)?, w.id.clone()),
+            Item::Local(path) => (self.local_thumb(path)?, local_key(path)),
+        };
+        let path = self.thumb(format!("blur-{key}"), |k| Job::Blur { key: k, path: src })?;
+        Some((path, key))
+    }
+
+    /// Glow color for an image on disk, from its thumbnail's palette.
+    pub(super) fn path_glow(&mut self, path: &Path) -> Option<Hsla> {
+        if !self.local_palettes.contains_key(path) {
+            let thumb = self.local_thumb(path)?;
+            self.local_palettes.insert(path.to_owned(), adaptive::image_palette(&thumb));
+        }
+        glow_color(self.local_palettes.get(path)?)
+    }
+}
