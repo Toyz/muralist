@@ -1029,6 +1029,10 @@ pub struct Muralist {
     rotating: bool,
     last_rotation: Instant,
     history_hover: Option<usize>,
+    /// The day the History timeline is narrowed to, if any.
+    history_day: Option<chrono::NaiveDate>,
+    /// The month the History calendar shows; the current one when unset.
+    history_month: Option<(i32, u32)>,
     slot: Option<slot::Slot>,
     /// Spun wallpapers still downloading, by monitor.
     landing: Vec<(String, Wallpaper)>,
@@ -1278,6 +1282,8 @@ impl Muralist {
             rotating: false,
             last_rotation: Instant::now(),
             history_hover: None,
+            history_day: None,
+            history_month: None,
             slot: None,
             landing: Vec::new(),
             stage_gen: 0,
@@ -2665,13 +2671,7 @@ impl Muralist {
         } else if tab == Tab::Library {
             cards = cards.child(self.render_library_side(cx));
         } else {
-            cards = cards.child(
-                side_card("calendar", "History", Some(compact_count(self.applied.history.len() as u64).into()), p)
-                    .child(div().text_xs().text_color(p.muted).child(
-                        "Every set you've applied. Restore or re-apply one, or hover it and hold Space to see it on \
-                         your desktop.",
-                    )),
-            );
+            cards = cards.child(self.render_history_side(cx));
         }
 
         let saved = self.cfg.filters.count();
