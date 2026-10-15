@@ -20,7 +20,7 @@ use windows::Win32::UI::Shell::{DWPOS_FILL, DesktopWallpaper, IDesktopWallpaper}
 use windows::Win32::UI::WindowsAndMessaging::MONITORINFOF_PRIMARY;
 use windows::core::{HSTRING, PCWSTR, PWSTR};
 
-use super::{Backend, Caps, Desktop, Images, Lock, Ops, ReadBack, SetEach, SetOne};
+use super::{Backend, Caps, Desktop, Images, Lock, Ops, ReadBack, SetEach, SetOne, Shown};
 use crate::monitors::Monitor;
 
 pub struct Windows;
@@ -45,17 +45,18 @@ impl Backend for Windows {
 }
 
 impl SetOne<Desktop> for Windows {
-    fn set_one(&self, image: &Path, _monitors: &[Monitor]) -> Result<()> {
+    fn set_one(&self, image: &Path, _monitors: &[Monitor]) -> Result<Shown> {
         let _com = Com::init();
         let shell = shell()?;
         fill(&shell)?;
         // A null monitor ID means every monitor.
-        unsafe { shell.SetWallpaper(PCWSTR::null(), &wide_path(image)?) }.context("setting the wallpaper")
+        unsafe { shell.SetWallpaper(PCWSTR::null(), &wide_path(image)?) }.context("setting the wallpaper")?;
+        Ok(None)
     }
 }
 
 impl SetEach<Desktop> for Windows {
-    fn set_each(&self, images: &Images, _monitors: &[Monitor]) -> Result<()> {
+    fn set_each(&self, images: &Images, _monitors: &[Monitor]) -> Result<Shown> {
         let _com = Com::init();
         let shell = shell()?;
         fill(&shell)?;
@@ -65,7 +66,7 @@ impl SetEach<Desktop> for Windows {
                     .with_context(|| format!("setting the wallpaper on {}", monitor.name))?;
             }
         }
-        Ok(())
+        Ok(None)
     }
 }
 
@@ -85,12 +86,13 @@ impl ReadBack<Desktop> for Windows {
 }
 
 impl SetOne<Lock> for Windows {
-    fn set_one(&self, image: &Path, _monitors: &[Monitor]) -> Result<()> {
+    fn set_one(&self, image: &Path, _monitors: &[Monitor]) -> Result<Shown> {
         let _com = Com::init();
         let file = StorageFile::GetFileFromPathAsync(&wide_path(image)?)?.join()?;
         LockScreen::SetImageFileAsync(&file)?
             .join()
-            .context("setting the lock screen (Windows Spotlight or a group policy may be managing it)")
+            .context("setting the lock screen (Windows Spotlight or a group policy may be managing it)")?;
+        Ok(None)
     }
 }
 

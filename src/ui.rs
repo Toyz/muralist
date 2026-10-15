@@ -168,6 +168,11 @@ fn pal() -> Pal {
     adaptive::current()
 }
 
+/// Whether two paths name the same file (directly, or once resolved).
+fn same_file(a: &Path, b: &Path) -> bool {
+    a == b || matches!((std::fs::canonicalize(a), std::fs::canonicalize(b)), (Ok(x), Ok(y)) if x == y)
+}
+
 fn purity_color(purity: Purity) -> Hsla {
     match purity {
         Purity::Sfw => hex(0x22c55e),
@@ -2319,15 +2324,16 @@ impl Muralist {
                 .spawn(async move {
                     let mut done = Vec::new();
                     for (target, images) in jobs {
-                        match target {
+                        // What the screens show afterwards, when the backend can tell.
+                        let shown = match target {
                             Target::Desktop => {
-                                backend.desktop().context("no desktop backend")?.set(&images, &monitors)?;
+                                backend.desktop().context("no desktop backend")?.set(&images, &monitors)?
                             }
                             Target::Lock => {
-                                backend.lock().context("no lock screen")?.apply(&images, &monitors, lock_mode)?;
+                                backend.lock().context("no lock screen")?.apply(&images, &monitors, lock_mode)?
                             }
-                        }
-                        done.push((target, images));
+                        };
+                        done.push((target, images, shown));
                     }
                     anyhow::Ok(done)
                 })
@@ -2336,24 +2342,46 @@ impl Muralist {
                 this.busy -= 1;
                 match result {
                     Ok(done) => {
-                        let names: Vec<&str> = done.iter().map(|(t, _)| t.label()).collect();
-                        let msg = format!("{} updated", names.join(" and "));
-                        for (target, images) in done {
+                        let names: Vec<&str> = done.iter().map(|(t, _, _)| t.label()).collect();
+                        let mut msg = format!("{} updated", names.join(" and "));
+                        let mut missed: Vec<String> = Vec::new();
+                        for (target, images, shown) in done {
+                            // When the backend reports what each screen shows, that's
+                            // the truth: screens it didn't take are named, and what's
+                            // recorded as up is what's really up.
+                            let now = match shown {
+                                Some(shown) => {
+                                    for (name, path) in &images {
+                                        if shown.get(name).is_some_and(|s| !same_file(s, path)) {
+                                            missed.push(name.clone());
+                                        }
+                                    }
+                                    let mut now = images.clone();
+                                    now.extend(shown);
+                                    now
+                                }
+                                None => images.clone(),
+                            };
                             match target {
                                 Target::Desktop => {
                                     this.applied.record(crate::config::Surface::Desktop, &images);
-                                    this.applied.desktop = images;
+                                    this.applied.desktop = now.clone();
+                                    this.desktop = now;
                                 }
                                 Target::Lock => {
                                     this.applied.record(crate::config::Surface::Lock, &images);
-                                    this.applied.lock = images;
+                                    this.applied.lock = now.clone();
+                                    this.lock = now;
                                 }
                             }
                         }
                         if let Err(e) = this.applied.save() {
                             eprintln!("saving state: {e:#}");
                         }
-                        this.set_status(msg, false, cx);
+                        if !missed.is_empty() {
+                            msg = format!("Set, but {} didn't take it", missed.join(", "));
+                        }
+                        this.set_status(msg, !missed.is_empty(), cx);
                     }
                     Err(e) => this.set_status(format!("Apply failed: {e:#}"), true, cx),
                 }

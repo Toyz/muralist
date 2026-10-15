@@ -9,7 +9,7 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use super::{Backend, Caps, Desktop, Images, Lock, Ops, ReadBack, SetEach, SetOne};
+use super::{Backend, Caps, Desktop, Images, Lock, Ops, ReadBack, SetEach, SetOne, Shown};
 use crate::monitors::Monitor;
 
 pub struct Plasma;
@@ -33,15 +33,15 @@ impl Backend for Plasma {
 }
 
 impl SetOne<Desktop> for Plasma {
-    fn set_one(&self, image: &Path, monitors: &[Monitor]) -> Result<()> {
+    fn set_one(&self, image: &Path, monitors: &[Monitor]) -> Result<Shown> {
         let images = monitors.iter().map(|m| (m.name.clone(), image.to_path_buf())).collect();
-        shell::apply_desktop(&images, monitors)
+        shell::apply_desktop(&images, monitors).map(Some)
     }
 }
 
 impl SetEach<Desktop> for Plasma {
-    fn set_each(&self, images: &Images, monitors: &[Monitor]) -> Result<()> {
-        shell::apply_desktop(images, monitors)
+    fn set_each(&self, images: &Images, monitors: &[Monitor]) -> Result<Shown> {
+        shell::apply_desktop(images, monitors).map(Some)
     }
 }
 
@@ -53,14 +53,14 @@ impl ReadBack<Desktop> for Plasma {
 
 /// One image uses Plasma's stock image plugin; per monitor uses ours.
 impl SetOne<Lock> for Plasma {
-    fn set_one(&self, image: &Path, _monitors: &[Monitor]) -> Result<()> {
-        shell::apply_lock_single(image)
+    fn set_one(&self, image: &Path, _monitors: &[Monitor]) -> Result<Shown> {
+        shell::apply_lock_single(image).map(|()| None)
     }
 }
 
 impl SetEach<Lock> for Plasma {
-    fn set_each(&self, images: &Images, monitors: &[Monitor]) -> Result<()> {
-        shell::apply_lock_per_monitor(images, monitors)
+    fn set_each(&self, images: &Images, monitors: &[Monitor]) -> Result<Shown> {
+        shell::apply_lock_per_monitor(images, monitors).map(|()| None)
     }
 }
 

@@ -13,7 +13,7 @@ use objc2::rc::Retained;
 use objc2_app_kit::{NSScreen, NSWorkspace};
 use objc2_foundation::{NSDictionary, NSString, NSURL};
 
-use super::{Backend, Caps, Desktop, Images, Ops, ReadBack, SetEach, SetOne};
+use super::{Backend, Caps, Desktop, Images, Ops, ReadBack, SetEach, SetOne, Shown};
 use crate::monitors::Monitor;
 
 pub struct MacOs;
@@ -38,15 +38,15 @@ impl Backend for MacOs {
 }
 
 impl SetOne<Desktop> for MacOs {
-    fn set_one(&self, image: &Path, monitors: &[Monitor]) -> Result<()> {
+    fn set_one(&self, image: &Path, monitors: &[Monitor]) -> Result<Shown> {
         let images = monitors.iter().map(|m| (m.name.clone(), image.to_path_buf())).collect();
         self.set_each(&images, monitors)
     }
 }
 
 impl SetEach<Desktop> for MacOs {
-    fn set_each(&self, images: &Images, _monitors: &[Monitor]) -> Result<()> {
-        run_on_main(|mtm| {
+    fn set_each(&self, images: &Images, _monitors: &[Monitor]) -> Result<Shown> {
+        run_on_main(|mtm| -> Result<()> {
             let workspace = NSWorkspace::sharedWorkspace();
             let options = NSDictionary::new();
             for (screen, monitor) in screens(mtm) {
@@ -59,6 +59,7 @@ impl SetEach<Desktop> for MacOs {
             }
             Ok(())
         })
+        .map(|()| None)
     }
 }
 

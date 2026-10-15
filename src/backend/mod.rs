@@ -78,15 +78,20 @@ impl Surface for Lock {
     }
 }
 
+/// What each monitor of a surface shows once a set has gone through, when
+/// the backend learns it in the same go (Plasma's script reads every screen
+/// back as it sets them); `None` when it can't tell.
+pub type Shown = Option<Images>;
+
 /// Put one image on every monitor of surface `S`.
 pub trait SetOne<S: Surface> {
-    fn set_one(&self, image: &Path, monitors: &[Monitor]) -> Result<()>;
+    fn set_one(&self, image: &Path, monitors: &[Monitor]) -> Result<Shown>;
 }
 
 /// A different image on each monitor of surface `S`.
 pub trait SetEach<S: Surface>: SetOne<S> {
     /// Monitors missing from `images` are left alone.
-    fn set_each(&self, images: &Images, monitors: &[Monitor]) -> Result<()>;
+    fn set_each(&self, images: &Images, monitors: &[Monitor]) -> Result<Shown>;
 }
 
 /// Report what each monitor of surface `S` shows now.
@@ -94,8 +99,8 @@ pub trait ReadBack<S: Surface> {
     fn current(&self, monitors: &[Monitor]) -> Result<Images>;
 }
 
-type SetOneFn<B> = fn(&B, &Path, &[Monitor]) -> Result<()>;
-type SetEachFn<B> = fn(&B, &Images, &[Monitor]) -> Result<()>;
+type SetOneFn<B> = fn(&B, &Path, &[Monitor]) -> Result<Shown>;
+type SetEachFn<B> = fn(&B, &Images, &[Monitor]) -> Result<Shown>;
 type ReadFn<B> = fn(&B, &[Monitor]) -> Result<Images>;
 
 /// What backend `B` can do on surface `S`. Built at compile time; each
@@ -314,12 +319,12 @@ impl<S: Surface> Wall<'_, S> {
 
     /// Set each monitor's image. On a [`Reach::Shared`] surface the primary
     /// monitor's image goes everywhere.
-    pub fn set(&self, images: &Images, monitors: &[Monitor]) -> Result<()> {
+    pub fn set(&self, images: &Images, monitors: &[Monitor]) -> Result<Shown> {
         self.run(WallOp::Each(images, monitors))
     }
 
     /// Put `image` on every monitor.
-    pub fn set_one(&self, image: &Path, monitors: &[Monitor]) -> Result<()> {
+    pub fn set_one(&self, image: &Path, monitors: &[Monitor]) -> Result<Shown> {
         self.run(WallOp::One(image, monitors))
     }
 
@@ -341,10 +346,10 @@ impl<S: Surface> Wall<'_, S> {
         self.session.visit(Read::<S>(monitors, PhantomData))
     }
 
-    fn run(&self, op: WallOp<'_>) -> Result<()> {
+    fn run(&self, op: WallOp<'_>) -> Result<Shown> {
         struct Run<'a, S>(WallOp<'a>, PhantomData<S>);
         impl<S: Surface> Visit for Run<'_, S> {
-            type Out = Result<()>;
+            type Out = Result<Shown>;
             fn backend<B: Backend>(self, b: &B) -> Self::Out {
                 let ops = S::ops(&B::CAPS).context("surface not supported")?;
                 match (self.0, ops.each) {
@@ -366,7 +371,7 @@ impl<S: Surface> Wall<'_, S> {
 
 impl Wall<'_, Lock> {
     /// Set the lock screen the way the user prefers.
-    pub fn apply(&self, images: &Images, monitors: &[Monitor], mode: LockMode) -> Result<()> {
+    pub fn apply(&self, images: &Images, monitors: &[Monitor], mode: LockMode) -> Result<Shown> {
         match mode {
             LockMode::PerMonitor => self.set(images, monitors),
             LockMode::Single => {
@@ -390,7 +395,9 @@ pub fn primary_image<'a>(images: &'a Images, monitors: &[Monitor]) -> Option<&'a
 
 #[cfg(test)]
 mod tests {
-    use super::{Backend, Caps, Desktop, Images, Lock, Ops, Reach, ReadBack, Session, SetEach, SetOne, primary_image};
+    use super::{
+        Backend, Caps, Desktop, Images, Lock, Ops, Reach, ReadBack, Session, SetEach, SetOne, Shown, primary_image,
+    };
     use crate::config::LockMode;
     use crate::monitors::Monitor;
     use anyhow::Result;
@@ -423,14 +430,14 @@ mod tests {
     }
 
     impl SetOne<Desktop> for Fake {
-        fn set_one(&self, image: &Path, _: &[Monitor]) -> Result<()> {
-            self.log(format!("desktop one {}", image.display()))
+        fn set_one(&self, image: &Path, _: &[Monitor]) -> Result<Shown> {
+            self.log(format!("desktop one {}", image.display())).map(|()| None)
         }
     }
 
     impl SetEach<Desktop> for Fake {
-        fn set_each(&self, images: &Images, _: &[Monitor]) -> Result<()> {
-            self.log(format!("desktop each {}", images.len()))
+        fn set_each(&self, images: &Images, _: &[Monitor]) -> Result<Shown> {
+            self.log(format!("desktop each {}", images.len())).map(|()| None)
         }
     }
 
@@ -441,8 +448,8 @@ mod tests {
     }
 
     impl SetOne<Lock> for Fake {
-        fn set_one(&self, image: &Path, _: &[Monitor]) -> Result<()> {
-            self.log(format!("lock one {}", image.display()))
+        fn set_one(&self, image: &Path, _: &[Monitor]) -> Result<Shown> {
+            self.log(format!("lock one {}", image.display())).map(|()| None)
         }
     }
 

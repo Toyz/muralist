@@ -60,6 +60,8 @@ fn pick_plugin_js() -> String {
 }
 
 /// The plasmashell script that sets each screen's image; `by_pos` maps "x,y" to a file URL.
+/// It then reads every screen back and prints `{"hit": n, "shown": {"x,y": url}}`, so the
+/// caller learns what each screen really shows in the same round trip.
 fn set_desktop_script(by_pos: Map<String, Value>) -> String {
     // FillMode 2 = PreserveAspectCrop. Only switch plugins when we must: reassigning
     // the same one reloads the wallpaper and restarts a shader plugin's animation.
@@ -67,21 +69,28 @@ fn set_desktop_script(by_pos: Map<String, Value>) -> String {
         r#"
 var images = {map};
 var hit = 0;
+var shown = {{}};
 var ds = desktops();
 for (var i = 0; i < ds.length; i++) {{
     var d = ds[i];
     if (d.screen < 0) continue;
     var g = screenGeometry(d.screen);
-    var img = images[g.x + "," + g.y];
-    if (!img) continue;
+    var key = g.x + "," + g.y;
+    var img = images[key];
     {pick}
-    if (d.wallpaperPlugin != p) d.wallpaperPlugin = p;
-    d.currentConfigGroup = ["Wallpaper", p, "General"];
-    d.writeConfig("Image", img);
-    d.writeConfig("FillMode", 2);
-    hit++;
+    if (img) {{
+        if (d.wallpaperPlugin != p) d.wallpaperPlugin = p;
+        d.currentConfigGroup = ["Wallpaper", p, "General"];
+        d.writeConfig("Image", img);
+        d.writeConfig("FillMode", 2);
+        hit++;
+    }}
+    if (d.wallpaperPlugin == p) {{
+        d.currentConfigGroup = ["Wallpaper", p, "General"];
+        shown[key] = String(d.readConfig("Image"));
+    }}
 }}
-print(hit);
+print(JSON.stringify({{hit: hit, shown: shown}}));
 "#,
         map = Value::Object(by_pos),
         pick = pick_plugin_js()
@@ -110,7 +119,11 @@ print(r.join("\n"));
 }
 
 /// Set each monitor's desktop wallpaper. Monitors missing from `images` are left alone.
-pub(super) fn apply_desktop(images: &BTreeMap<String, PathBuf>, monitors: &[Monitor]) -> Result<()> {
+/// Returns what every monitor shows afterwards, as Plasma reports it.
+pub(super) fn apply_desktop(
+    images: &BTreeMap<String, PathBuf>,
+    monitors: &[Monitor],
+) -> Result<BTreeMap<String, PathBuf>> {
     let mut by_pos = Map::new();
     for m in monitors {
         if let Some(path) = images.get(&m.name) {
@@ -121,10 +134,30 @@ pub(super) fn apply_desktop(images: &BTreeMap<String, PathBuf>, monitors: &[Moni
         bail!("nothing assigned to any monitor");
     }
     let out = evaluate_script(&set_desktop_script(by_pos))?;
-    if out.trim().parse::<u32>().unwrap_or(0) == 0 {
+    let (hit, shown) = parse_set_reply(&out, monitors)?;
+    if hit == 0 {
         bail!("plasmashell matched no screens; monitor layout may have changed");
     }
-    Ok(())
+    Ok(shown)
+}
+
+/// The set script's reply: how many screens it set, and what each monitor shows.
+fn parse_set_reply(out: &str, monitors: &[Monitor]) -> Result<(u32, BTreeMap<String, PathBuf>)> {
+    #[derive(serde::Deserialize)]
+    struct Reply {
+        hit: u32,
+        #[serde(default)]
+        shown: BTreeMap<String, String>,
+    }
+    let reply: Reply = serde_json::from_str(out.trim()).context("reading plasmashell's reply")?;
+    let shown = monitors
+        .iter()
+        .filter_map(|m| {
+            let url = reply.shown.get(&pos_key(m.x, m.y)).filter(|u| !u.is_empty())?;
+            Some((m.name.clone(), url_path(url)))
+        })
+        .collect();
+    Ok((reply.hit, shown))
 }
 
 /// Read the current desktop wallpaper of each monitor.
@@ -306,6 +339,28 @@ mod script_tests {
         assert!(s.contains("if (d.wallpaperPlugin != p) continue;"));
         assert!(s.contains(r#"d.currentConfigGroup = ["Wallpaper", p, "General"];"#));
         assert!(!s.contains(r#""org.kde.image", "General""#));
+    }
+
+    #[test]
+    fn set_reports_what_each_screen_shows() {
+        let s = set_script();
+        assert!(s.contains("print(JSON.stringify({hit: hit, shown: shown}));"));
+        let monitors = [crate::monitors::Monitor {
+            name: "DP-1".into(),
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 10,
+            px_width: 10,
+            px_height: 10,
+            primary: true,
+        }];
+        let (hit, shown) =
+            parse_set_reply(r#"{"hit":1,"shown":{"0,0":"file:///tmp/my%20wall.jpg","9,9":"file:///x"}}"#, &monitors)
+                .unwrap();
+        assert_eq!(hit, 1);
+        assert_eq!(shown["DP-1"], std::path::Path::new("/tmp/my wall.jpg"));
+        assert_eq!(shown.len(), 1);
     }
 
     #[test]
