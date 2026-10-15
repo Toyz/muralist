@@ -16,10 +16,10 @@ mod history;
 mod kit;
 mod library;
 mod lightbox;
-mod minimap;
 mod peek;
 mod pipeline;
 mod rotate;
+mod scrollbar;
 mod searchbar;
 mod settings;
 mod sheet;
@@ -67,6 +67,8 @@ const SIDE_CARD_PAD: f32 = 12.;
 const INSPECTOR_PAD: f32 = 20.;
 /// Preview height when nothing (or nothing measurable) is selected.
 const PREVIEW_H: f32 = 236.;
+/// Wallhaven's small thumbnails are a 3:2 crop from the middle.
+const SMALL_THUMB_ASPECT: f32 = 1.5;
 /// Image palettes decoded per frame at most (each is a small image decode).
 const PALETTES_PER_FRAME: u8 = 2;
 
@@ -1037,10 +1039,8 @@ pub struct Muralist {
     /// The pointer is over the settings gear, which spins up.
     gear_hover: bool,
     gear_angle: f32,
-    /// Dragging the grid's minimap thumb, grabbed this far below its top.
-    grid_drag: Option<minimap::MinimapDrag>,
-    /// The pointer is on the scrollbar, which opens into a minimap.
-    minimap_open: bool,
+    /// Dragging the grid's scrollbar.
+    grid_drag: Option<scrollbar::ScrollDrag>,
     /// How the fit lab looks at the selection: spanned or per screen.
     fit_mode: fitlab::FitMode,
     gear_tick: Instant,
@@ -1324,7 +1324,6 @@ impl Muralist {
             gear_hover: false,
             gear_angle: 0.,
             grid_drag: None,
-            minimap_open: false,
             fit_mode: fitlab::FitMode::default(),
             gear_tick: Instant::now(),
             dossier_hover: None,
@@ -3754,7 +3753,7 @@ impl Muralist {
         let rows = if mosaic { self.justified.len() + 1 } else { count.div_ceil(cols) + 1 };
         // Rows repaint each frame; stale rects would mislead the predictor.
         self.card_bounds.borrow_mut().clear();
-        let minimap = self.render_minimap(&items, cx);
+        let scrollbar = self.render_scrollbar(cx);
         div()
             .id("grid-area")
             .relative()
@@ -3790,7 +3789,7 @@ impl Muralist {
                 .size_full()
                 .track_scroll(&self.grid_scroll),
             )
-            .children(minimap)
+            .children(scrollbar)
             .into_any_element()
     }
 
@@ -3875,11 +3874,25 @@ impl Muralist {
             .on_click(cx.listener(|this, _, window, cx| this.open_lightbox(window, cx)))
             // The thumbnail "develops": monochrome and dimmed until the
             // original arrives. Drawn from the shared cache, so no wait.
+            // The grid's thumbnail is Wallhaven's 3:2 crop from the middle of
+            // the picture, so it's drawn exactly where that crop sits inside
+            // the picture's own fitted rect: a tall picture's thumbnail is a
+            // band across it, never wings out past its sides.
             .when_some(under, |d, t| {
-                d.child(radius(
-                    box_ratio(img(t).size_full(), box_w, target_h).object_fit(ObjectFit::Contain).grayscale(developing),
-                    12.,
-                ))
+                let aspect = self.selected_dims.map_or(16. / 9., |(w, h)| w as f32 / h.max(1) as f32);
+                let (fw, fh) = (box_w.min(target_h * aspect), box_w.min(target_h * aspect) / aspect);
+                let (tw, th) = if aspect >= SMALL_THUMB_ASPECT {
+                    (fh * SMALL_THUMB_ASPECT, fh)
+                } else {
+                    (fw, fw / SMALL_THUMB_ASPECT)
+                };
+                d.child(
+                    div()
+                        .absolute()
+                        .left(px((box_w - tw) / 2.))
+                        .top(px((target_h - th) / 2.))
+                        .child(boxed(img(t), tw, th).object_fit(ObjectFit::Cover).grayscale(developing)),
+                )
             })
             .when_some(base, |d, t| {
                 d.child(radius(
@@ -4633,7 +4646,7 @@ impl Render for Muralist {
                 }
                 if this.grid_drag.is_some() {
                     if ev.pressed_button == Some(MouseButton::Left) {
-                        this.drag_minimap(ev.position.y, cx);
+                        this.drag_scrollbar(ev.position.y, cx);
                     } else {
                         this.grid_drag = None;
                         cx.notify();
