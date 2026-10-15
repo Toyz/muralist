@@ -2946,9 +2946,13 @@ impl Muralist {
         };
         let hide = spoiler && !(hovered && self.cfg.spoiler_hover);
 
+        // The picture sits inside the card's border, so its box is the card
+        // less the border on each side; pin that ratio exactly.
+        let border = if !selected && purity.as_deref() == Some("sfw") { 1. } else { 2. };
+        let (iw, ih) = (w - border * 2., h - border * 2.);
         let image: AnyElement = match (&thumb, hide) {
             (_, true) => match mosaic {
-                Some(m) => radius(box_ratio(img(m).size_full(), w, h).object_fit(ObjectFit::Cover), CARD_INNER_R)
+                Some(m) => radius(box_ratio(img(m).size_full(), iw, ih).object_fit(ObjectFit::Cover), CARD_INNER_R)
                     .into_any_element(),
                 None => shimmer(SharedString::from(format!("card-shimmer-{card_key}"))).into_any_element(),
             },
@@ -2956,7 +2960,7 @@ impl Muralist {
                 let shimmer_id = SharedString::from(format!("card-shimmer-{card_key}"));
                 // Keep the placeholder up while the image decodes: no blank frame.
                 let image = radius(
-                    box_ratio(img(path.clone()).size_full(), w, h)
+                    box_ratio(img(path.clone()).size_full(), iw, ih)
                         .object_fit(ObjectFit::Cover)
                         .with_loading(move || shimmer(shimmer_id.clone()).into_any_element()),
                     CARD_INNER_R,
