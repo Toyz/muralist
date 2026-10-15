@@ -1,6 +1,8 @@
 mod adaptive;
 mod context;
 mod details;
+mod develop;
+mod dossier;
 mod drag;
 mod galleries;
 mod gallery_edit;
@@ -560,13 +562,16 @@ struct Bands {
     fraction: Option<f32>,
     mask: u64,
     count: u32,
+    /// Bytes landed, of `total` (0 while unknown).
+    done: u64,
+    total: u64,
 }
 
 /// One band per downloaded byte range, in the picture's own colors, each
 /// flashing as its bytes land. Ranges are fetched out of order over parallel
 /// connections, so the image develops in a ragged wave, stragglers and all.
-fn develop_bands(key: &str, src: &Path, bands: Bands, r: f32) -> Vec<AnyElement> {
-    let Bands { fraction, mask, count } = bands;
+fn develop_bands(key: &str, src: &Path, bands: Bands, r: f32, (w, h): (f32, f32)) -> Vec<AnyElement> {
+    let Bands { fraction, mask, count, .. } = bands;
     // Single-stream downloads have no ranges; fake 16 sequential bands.
     let (mask, n) = match (count, fraction) {
         (0, Some(f)) => {
@@ -590,13 +595,10 @@ fn develop_bands(key: &str, src: &Path, bands: Bands, r: f32) -> Vec<AnyElement>
                 .overflow_hidden()
                 .child(
                     // Full-size image shifted up so this band shows its own slice.
-                    div()
-                        .absolute()
-                        .left_0()
-                        .w_full()
-                        .top(relative(-(i as f32)))
-                        .h(relative(n as f32))
-                        .child(radius(img(src.to_owned()).size_full().object_fit(ObjectFit::Contain), r)),
+                    div().absolute().left_0().w_full().top(relative(-(i as f32))).h(relative(n as f32)).child(radius(
+                        box_ratio(img(src.to_owned()).size_full(), w, h).object_fit(ObjectFit::Contain),
+                        r,
+                    )),
                 )
                 .child(div().absolute().top_0().left_0().size_full().bg(white()).with_animation(
                     SharedString::from(format!("band-flash-{key}-{i}")),
@@ -974,6 +976,10 @@ pub struct Muralist {
     /// Holds the decoded full-resolution preview; cleared on every selection
     /// so only one large image stays in memory.
     preview_cache: Entity<RetainAllImageCache>,
+    /// Preview height easing: from, to, since, and a counter naming the run.
+    preview_h_anim: (f32, f32, Instant, u64),
+    /// The original last seen downloading, to lock on when it lands.
+    develop_watch: Option<String>,
     info: HashMap<String, InfoState>,
     full: HashMap<String, FullState>,
     tags_expanded: bool,
@@ -999,6 +1005,8 @@ pub struct Muralist {
     last_rotation: Instant,
     /// The pointer is over the settings gear, which spins up.
     gear_hover: bool,
+    /// Which Info/Similar dossier the pointer is on.
+    dossier_hover: Option<u8>,
     history_hover: Option<usize>,
     /// The day the History timeline is narrowed to, if any.
     history_day: Option<chrono::NaiveDate>,
@@ -1231,6 +1239,8 @@ impl Muralist {
             wh_user,
             selected: None,
             preview_cache: RetainAllImageCache::new(cx),
+            preview_h_anim: (PREVIEW_H, PREVIEW_H, Instant::now(), 0),
+            develop_watch: None,
             selected_dims: None,
             info: HashMap::new(),
             full: HashMap::new(),
@@ -1253,6 +1263,7 @@ impl Muralist {
             rotating: false,
             last_rotation: Instant::now(),
             gear_hover: false,
+            dossier_hover: None,
             history_hover: None,
             history_day: None,
             history_month: None,
@@ -1796,6 +1807,8 @@ impl Muralist {
                     fraction: (total > 0).then(|| done as f32 / total as f32),
                     mask: progress.chunks.load(Ordering::Relaxed),
                     count: progress.chunk_count.load(Ordering::Relaxed),
+                    done,
+                    total,
                 })
             }
         }
@@ -1813,7 +1826,7 @@ impl Muralist {
     /// Queue the preview- and screen-sized copies so neither the inspector
     /// nor the lightbox ever waits on a resize.
     fn prewarm_fits(&mut self, src: &Path) {
-        let base = self.details_base();
+        let base = self.preview_w();
         let preview_h = image::image_dimensions(src)
             .map(|(w, h)| preview_h_for(w as f32 / h.max(1) as f32, base))
             .unwrap_or(PREVIEW_H);
@@ -1827,7 +1840,7 @@ impl Muralist {
 
     /// Preview box height for the current selection.
     fn preview_h(&self) -> f32 {
-        let base = self.details_base();
+        let base = self.preview_w();
         self.selected_dims.map(|(w, h)| preview_h_for(w as f32 / h.max(1) as f32, base)).unwrap_or(PREVIEW_H)
     }
 
@@ -3639,82 +3652,121 @@ impl Muralist {
             Item::Local(_) => None,
         };
         let (base, full, key) = match item {
+            // The big thumbnail if it's here, else the grid's own, which is
+            // already decoded: something shows the instant you click.
             Item::Remote(w) => (self.remote_thumb(w, true), self.remote_full(w, cx), w.id.clone()),
             Item::Local(path) => (self.local_thumb(path), Some(path.clone()), local_key(path)),
+        };
+        // Underneath it all, the grid's own thumbnail, already decoded:
+        // something shows the instant you click, and stays while the bigger
+        // copies decode on top.
+        let under = match item {
+            Item::Remote(w) => self.remote_thumb(w, false),
+            Item::Local(_) => None,
         };
         let phase = self.full_phase(item);
         // Show a downscale made for exactly this box; the raw original would
         // alias when the GPU shrinks it 10-20x.
         let fit_w = self.fit_width();
-        let preview_h = self.preview_h();
-        let fit_h = (preview_h * self.scale).round() as u32;
+        let target_h = self.preview_h();
+        let box_w = self.preview_w();
+        let fit_h = (target_h * self.scale).round() as u32;
         let fit = full.as_deref().and_then(|f| self.fitted(f, fit_w, fit_h));
+
+        // The box eases between shapes instead of snapping, from wherever
+        // it is right now if it was already moving.
+        const RESHAPE_MS: f32 = 280.;
+        let ease = |t: f32| 1. - (1. - t.clamp(0., 1.)).powi(3);
+        let (from, to, since, run) = self.preview_h_anim;
+        if (to - target_h).abs() > 0.5 {
+            let now_h = from + (to - from) * ease(since.elapsed().as_secs_f32() * 1000. / RESHAPE_MS);
+            self.preview_h_anim = (now_h, target_h, Instant::now(), run + 1);
+        }
+        let (from_h, to_h, _, run) = self.preview_h_anim;
+
         // Gray only while the original is still on the wire.
         let bands = match &phase {
             FullPhase::Loading(b) => Some(*b),
             _ => None,
         };
         let developing = bands.is_some();
-        let no_data = bands.is_none_or(|b| b.mask == 0 && b.fraction.unwrap_or(0.) < 1. / 16.);
-        let base_missing = base.is_none() && fit.is_none();
+        let base_missing = base.is_none() && under.is_none() && fit.is_none();
         let xray = self.xray_overlay();
         let band_layers = match (bands, &base) {
-            (Some(b), Some(t)) => develop_bands(&key, t, b, 12.),
+            (Some(b), Some(t)) => develop_bands(&key, t, b, 12., (box_w, target_h)),
+            _ => Vec::new(),
+        };
+        let colors: Vec<Hsla> = remote.iter().flat_map(|w| w.colors.iter().filter_map(|c| parse_hex(c))).collect();
+        let glow = glass::glow_color(&colors).unwrap_or(p.accent);
+        let hud = bands.map(|b| develop::hud(&key, b, &colors, glow, target_h)).unwrap_or_default();
+        // Lock on once what was downloading has landed.
+        if developing {
+            self.develop_watch = Some(key.clone());
+        }
+        let lock = match (&phase, &remote) {
+            (FullPhase::Done, Some(w)) if self.develop_watch.as_deref() == Some(key.as_str()) => develop::lock(
+                &key,
+                glow,
+                format!("LOCKED  {}  ·  {:.1} MB", w.resolution, w.file_size as f64 / 1_048_576.),
+            ),
             _ => Vec::new(),
         };
 
         div()
-            .image_cache(self.preview_cache.clone())
             .id("preview")
             .group("preview")
             .relative()
             .w_full()
-            .h(px(preview_h))
             .rounded_xl()
             .overflow_hidden()
             .bg(hex(0x000000))
             .cursor_pointer()
             .on_click(cx.listener(|this, _, window, cx| this.open_lightbox(window, cx)))
-            // The thumbnail "develops": monochrome and dimmed until the original arrives.
+            // The thumbnail "develops": monochrome and dimmed until the
+            // original arrives. Drawn from the shared cache, so no wait.
+            .when_some(under, |d, t| {
+                d.child(radius(
+                    box_ratio(img(t).size_full(), box_w, target_h).object_fit(ObjectFit::Contain).grayscale(developing),
+                    12.,
+                ))
+            })
             .when_some(base, |d, t| {
-                d.child(radius(img(t).size_full().object_fit(ObjectFit::Contain).grayscale(developing), 12.))
+                d.child(radius(
+                    box_ratio(img(t).size_full(), box_w, target_h).object_fit(ObjectFit::Contain).grayscale(developing),
+                    12.,
+                ))
             })
             .when(developing || base_missing, |d| {
                 d.child(radius(div().absolute().top_0().left_0().size_full().bg(hsla(0., 0., 0., 0.35)), 12.))
             })
             .children(band_layers)
-            .when((developing && no_data) || base_missing, |d| {
-                d.child(shimmer(SharedString::from(format!("shimmer-{key}"))))
-            })
-            .when_some(fit, |d, f| {
-                d.child(fade_in(
-                    SharedString::from(format!("fade-{key}")),
-                    radius(img(f).size_full().object_fit(ObjectFit::Contain), 12.),
-                ))
-            })
-            // Color X-ray: everything but the hovered palette color, darkened.
-            .when_some(xray, |d, mask| {
-                d.child(radius(img(mask).absolute().top_0().left_0().size_full().object_fit(ObjectFit::Contain), 12.))
-            })
+            .when(base_missing, |d| d.child(shimmer(SharedString::from(format!("shimmer-{key}")))))
+            // Big decoded images live in their own cache, cleared per selection.
+            .child(
+                div()
+                    .image_cache(self.preview_cache.clone())
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .when_some(fit, |d, f| {
+                        d.child(fade_in(
+                            SharedString::from(format!("fade-{key}")),
+                            radius(box_ratio(img(f).size_full(), box_w, target_h).object_fit(ObjectFit::Contain), 12.),
+                        ))
+                    })
+                    // Color X-ray: everything but the hovered palette color, darkened.
+                    .when_some(xray, |d, mask| {
+                        d.child(radius(
+                            box_ratio(img(mask).absolute().top_0().left_0().size_full(), box_w, target_h)
+                                .object_fit(ObjectFit::Contain),
+                            12.,
+                        ))
+                    }),
+            )
+            .children(hud)
+            .children(lock)
             .map(|d| match phase.clone() {
-                FullPhase::Done => d,
-                FullPhase::Loading(Bands { fraction, .. }) => d.child(
-                    v_flex()
-                        .absolute()
-                        .left_3()
-                        .right_3()
-                        .bottom_3()
-                        .gap_1p5()
-                        .items_end()
-                        .children(fraction.map(|f| {
-                            div()
-                                .text_xs()
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(hsla(0., 0., 1., 0.8))
-                                .child(format!("{}%", (f * 100.) as u32))
-                        }))
-                        .child(progress_line(SharedString::from(format!("sweep-{key}")), fraction, 3., p)),
-                ),
                 FullPhase::Failed(e) => d.child(
                     h_flex()
                         .id("full-retry")
@@ -3736,6 +3788,7 @@ impl Muralist {
                             this.retry_full(cx);
                         })),
                 ),
+                _ => d,
             })
             // Actions float on the preview while hovered, out of the way otherwise.
             .child(
@@ -3799,6 +3852,11 @@ impl Muralist {
                             }))
                             .render()
                     })),
+            )
+            .with_animation(
+                SharedString::from(format!("preview-h-{run}")),
+                Animation::new(std::time::Duration::from_millis(RESHAPE_MS as u64)),
+                move |d, t| d.h(px(from_h + (to_h - from_h) * ease(t))),
             )
     }
 
@@ -4048,6 +4106,11 @@ impl Muralist {
         self.insp_w - INSPECTOR_PAD * 2.
     }
 
+    /// Width of the preview: the panel less the pipeline's rail.
+    fn preview_w(&self) -> f32 {
+        self.details_base() - pipeline::STEP_INDENT
+    }
+
     /// Pixel width to resize previews to. Rounded up to a 64px step, so
     /// dragging the inspector's edge doesn't queue a resize per pixel.
     fn fit_width(&self) -> u32 {
@@ -4151,7 +4214,7 @@ impl Muralist {
             None => "none".into(),
         };
 
-        let details = glass::stagger(SharedString::from(format!("enter-{enter_key}-0")), 0, details);
+        let details = glass::settle(SharedString::from(format!("enter-{enter_key}")), details);
         let body = self.render_pipeline(details.into_any_element(), cx);
 
         let backdrop = self.backdrop();

@@ -24,7 +24,7 @@ const SCRAMBLE: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
 
 /// `id` partway through decoding: characters settle left to right, the rest
 /// still flicker through random glyphs.
-fn scrambled(id: &str, t: f32) -> String {
+pub(super) fn scrambled(id: &str, t: f32) -> String {
     let n = id.chars().count().max(1) as f32;
     let frame = (t * 40.) as u64;
     id.chars()

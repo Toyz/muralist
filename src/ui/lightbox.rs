@@ -234,7 +234,7 @@ impl Muralist {
                         IMG_R,
                     ))
                 })
-                .when_some(lb_bands, |d, (b, t)| d.children(develop_bands(&band_key, &t, b, IMG_R)))
+                .when_some(lb_bands, |d, (b, t)| d.children(develop_bands(&band_key, &t, b, IMG_R, (w, h))))
                 .when_some(fit.clone(), |d, f| {
                     d.child(fade_in(
                         SharedString::from(format!("lb-fade-{key}")),

@@ -76,6 +76,15 @@ pub(super) fn stagger(id: SharedString, index: usize, child: impl IntoElement) -
     )
 }
 
+/// A new selection settling into a panel: a quick lift into place from
+/// partly faded, offset without moving anything around it.
+pub(super) fn settle(id: SharedString, child: impl IntoElement) -> impl IntoElement {
+    div().relative().child(child).with_animation(id, Animation::new(Duration::from_millis(300)), |d, t| {
+        let e = 1. - (1. - t).powi(3);
+        d.opacity(0.3 + 0.7 * e).top(px(10. * (1. - e)))
+    })
+}
+
 impl Muralist {
     /// The blurred backdrop of the selection, once baked.
     pub(super) fn backdrop(&mut self) -> Option<(PathBuf, String)> {

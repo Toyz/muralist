@@ -14,8 +14,8 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::{
-    InspectorTab, Item, LockMode, Muralist, Pal, Placement, Reach, Target, TargetMode, boxed, details, drag, hex, icon,
-    kit, on_accent, pal, radius, segment, segmented_track, with_alpha,
+    LockMode, Muralist, Pal, Placement, Reach, Target, TargetMode, boxed, drag, hex, icon, kit, on_accent, pal, radius,
+    segment, segmented_track, with_alpha,
 };
 
 /// Corner radius of a screen tile, shared by its picture and its edge.
@@ -24,6 +24,8 @@ const TILE_R: f32 = 8.;
 const LAYOUT_H: f32 = 92.;
 /// Width of the rail column.
 const RAIL_W: f32 = 24.;
+/// How far a step's content sits in from the panel's edge: rail plus gap.
+pub(super) const STEP_INDENT: f32 = RAIL_W + 12.;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum StepState {
@@ -300,43 +302,8 @@ impl Muralist {
         let staged = changes > 0 || fetching > 0 || busy;
 
         // ---- 1. Wallpaper ----------------------------------------------------
-        let similar_count = match &selected {
-            Some(Item::Remote(w)) => match self.similar.get(&w.id) {
-                Some(details::Similar::Ready(list)) => Some(list.len()),
-                _ => None,
-            },
-            _ => None,
-        };
-        // Info and Similar open in a modal.
-        let more_toggle = |id: &'static str, label: String, icon_name: &'static str, t: InspectorTab| {
-            kit::Btn::new(id)
-                .label(label)
-                .icon(icon_name)
-                .sm()
-                .ghost()
-                .on_click(cx.listener(move |this, _, window, cx| this.open_sheet(t, window, cx)))
-        };
-        let toggles = selected.as_ref().map(|item| {
-            // Saved files with a known origin have Similar too.
-            let remote = match item {
-                Item::Remote(_) => true,
-                Item::Local(path) => self.provenance.of(path).is_some(),
-            };
-            h_flex().gap_1p5().child(more_toggle("more-info", "Info".into(), "info", InspectorTab::Info)).when(
-                remote,
-                |d| {
-                    d.child(more_toggle(
-                        "more-similar",
-                        match similar_count {
-                            Some(n) if n > 0 => format!("Similar  {n}"),
-                            _ => "Similar".into(),
-                        },
-                        "images",
-                        InspectorTab::Similar,
-                    ))
-                },
-            )
-        });
+        // Info and Similar open in a modal, from two little dossiers.
+        let toggles = selected.as_ref().map(|item| self.render_dossier(item, cx));
         // Or let muralist choose what goes up: Spin picks at random from your
         // results, Match picks ones whose colors suit the selection.
         let can_spin = !self.results.is_empty() && self.slot.is_none();
@@ -466,7 +433,7 @@ impl Muralist {
 
         // ---- 3. Screens -----------------------------------------------------
         let targets = mode.targets();
-        let avail = self.details_base() - RAIL_W - 12.;
+        let avail = self.preview_w();
         let (span_w, span_h) = self.desk_span();
         // Wide desks stack Desktop over Lock; others sit side by side.
         let stacked = targets.len() > 1 && span_w / span_h > 1.8;
