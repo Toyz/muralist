@@ -1,6 +1,7 @@
 mod adaptive;
 mod details;
 mod drag;
+mod galleries;
 mod glass;
 mod gridmodes;
 mod history;
@@ -32,6 +33,7 @@ use gpui_kit::*;
 
 use crate::backend::{Reach, Session};
 use crate::config::{Config, FilterOverrides, GridMode, LockMode, State, cache_dir};
+use crate::gallery::Galleries;
 use crate::monitors::Monitor;
 use crate::span;
 use crate::thumbs::{Job, ThumbPool, remote_cache_path};
@@ -781,6 +783,7 @@ enum Item {
 enum Tab {
     Discover,
     Library,
+    Galleries,
     History,
 }
 
@@ -893,6 +896,18 @@ pub struct Muralist {
 
     library: Vec<PathBuf>,
     tab: Tab,
+    galleries: Galleries,
+    /// The gallery the Galleries tab shows.
+    gallery: Option<u64>,
+    gallery_work: HashMap<u64, galleries::GalleryWork>,
+    import: Option<galleries::ImportState>,
+    picker: Option<galleries::Picker>,
+    /// Gallery whose name is being edited in the top bar.
+    renaming: Option<u64>,
+    /// Gallery whose delete button is waiting for a second click.
+    confirm_delete: Option<u64>,
+    gallery_name: Entity<InputState>,
+    wh_user: Entity<InputState>,
     selected: Option<Item>,
     /// Holds the decoded full-resolution preview; cleared on every selection
     /// so only one large image stays in memory.
@@ -1035,6 +1050,14 @@ impl Muralist {
             _ => {}
         });
 
+        let gallery_name = cx.new(|cx| InputState::new(window, cx).placeholder("Gallery name"));
+        let rename_sub = cx.subscribe_in(&gallery_name, window, |this, _, ev: &InputEvent, _, cx| match ev {
+            InputEvent::PressEnter { .. } | InputEvent::Blur => this.commit_rename(cx),
+            _ => {}
+        });
+        let wh_user =
+            cx.new(|cx| InputState::new(window, cx).placeholder("username").default_value(cfg.wallhaven_user.clone()));
+
         let (pool, mut done) = ThumbPool::start(client.clone());
         let thumb_task = cx.spawn(async move |this, cx| {
             while let Some(first) = done.next().await {
@@ -1094,6 +1117,15 @@ impl Muralist {
             grid_layout: GridLayout { cols: 1, card_w: MIN_CARD_W, card_h: MIN_CARD_W * 0.625 },
             library: Vec::new(),
             tab: Tab::Discover,
+            galleries: Galleries::load(),
+            gallery: None,
+            gallery_work: HashMap::new(),
+            import: None,
+            picker: None,
+            renaming: None,
+            confirm_delete: None,
+            gallery_name,
+            wh_user,
             selected: None,
             preview_cache: RetainAllImageCache::new(cx),
             selected_dims: None,
@@ -1155,13 +1187,14 @@ impl Muralist {
             status,
             status_error,
             toast_at: None,
-            _subscriptions: vec![sub],
+            _subscriptions: vec![sub, rename_sub],
             _thumb_task: thumb_task,
             cfg,
         };
         this.restore_filters();
         this.refresh_library();
         this.start_rotation_clock(cx);
+        this.resume_galleries(cx);
         if this.client.has_key() {
             this.load_account(cx);
         } else {
@@ -1476,6 +1509,7 @@ impl Muralist {
         let mut items: Vec<Item> = match self.tab {
             Tab::Discover => self.results.iter().cloned().map(Item::Remote).collect(),
             Tab::Library => self.library.iter().cloned().map(Item::Local).collect(),
+            Tab::Galleries => self.gallery_items(),
             Tab::History => Vec::new(),
         };
         if self.cfg.rainbow {
@@ -1692,15 +1726,9 @@ impl Muralist {
             .collect();
     }
 
-    fn search(&mut self, reset: bool, cx: &mut Context<Self>) {
-        if !reset && (self.searching || self.page >= self.last_page) {
-            return;
-        }
-        if reset {
-            self.persist_filters();
-        }
-        self.search_gen += 1;
-        let generation = self.search_gen;
+    /// What the sidebar, the search box and any scope add up to: the typed
+    /// text, the token to remember, and the first page's parameters.
+    fn current_search(&self, cx: &App) -> (String, String, SearchParams) {
         // Smart query: recognized words layer filters over the sidebar's,
         // for this search only.
         let typed = self.query.read(cx).value().to_string();
@@ -1718,7 +1746,6 @@ impl Muralist {
         if !purity.iter().any(|p| *p) {
             purity = self.purity;
         }
-        self.last_query = typed;
         let params = SearchParams {
             query: text,
             categories: ov.categories.unwrap_or(self.categories),
@@ -1729,9 +1756,25 @@ impl Muralist {
             atleast: ov.atleast.or_else(|| self.atleast.clone()),
             resolutions: self.resolutions.clone(),
             color: ov.color.or_else(|| self.color.clone()),
-            page: if reset { 1 } else { self.page + 1 },
-            seed: if reset { None } else { self.seed.clone() },
+            page: 1,
+            seed: None,
         };
+        (typed, raw, params)
+    }
+
+    fn search(&mut self, reset: bool, cx: &mut Context<Self>) {
+        if !reset && (self.searching || self.page >= self.last_page) {
+            return;
+        }
+        if reset {
+            self.persist_filters();
+        }
+        self.search_gen += 1;
+        let generation = self.search_gen;
+        let (typed, raw, mut params) = self.current_search(cx);
+        self.last_query = typed;
+        params.page = if reset { 1 } else { self.page + 1 };
+        params.seed = if reset { None } else { self.seed.clone() };
         self.searching = true;
         self.tab = Tab::Discover;
         if reset {
@@ -2017,22 +2060,23 @@ impl Muralist {
         let tab = self.tab;
         let has_key = self.client.has_key();
 
-        let nav = |id: &'static str, label: String, t: Tab| {
-            segment(id, label, tab == t, p).on_click(cx.listener(move |this, _, _, cx| {
-                if t == Tab::Library {
-                    this.refresh_library();
+        let nav = |id: &'static str, label: &'static str, t: Tab| {
+            // Tight padding: four labels share the sidebar's width.
+            segment(id, label, tab == t, p).px_0().on_click(cx.listener(move |this, _, _, cx| {
+                match t {
+                    Tab::Library => this.refresh_library(),
+                    Tab::Galleries => return this.show_galleries(cx),
+                    _ => {}
                 }
                 this.tab = t;
                 cx.notify();
             }))
         };
-        let counted = |label: &str, n: usize| {
-            if n == 0 { label.to_owned() } else { format!("{label}  {}", compact_count(n as u64)) }
-        };
         let nav = segmented_track(p)
-            .child(nav("nav-discover", "Discover".into(), Tab::Discover))
-            .child(nav("nav-library", counted("Library", self.library.len()), Tab::Library))
-            .child(nav("nav-history", counted("History", self.applied.history.len()), Tab::History));
+            .child(nav("nav-discover", "Discover", Tab::Discover))
+            .child(nav("nav-library", "Library", Tab::Library))
+            .child(nav("nav-galleries", "Galleries", Tab::Galleries))
+            .child(nav("nav-history", "History", Tab::History));
 
         let mut cards = v_flex().gap_3().px_3().py_3();
         if tab == Tab::Discover {
@@ -2204,6 +2248,8 @@ impl Muralist {
                 })
                 .child(div().grid().grid_cols(8).gap_1().child(any_swatch).children(swatches)),
             );
+        } else if tab == Tab::Galleries {
+            cards = cards.child(self.render_gallery_side(cx));
         } else if tab == Tab::Library {
             cards = cards.child(
                 side_card("folder", "Library", Some(compact_count(self.library.len() as u64).into()), p).child(
@@ -2266,6 +2312,7 @@ impl Muralist {
             )
             .child(div().px_3().pt_3().child(nav))
             .child(div().id("filters").flex_1().min_h_0().overflow_y_scroll().child(cards))
+            .children(self.render_drop_dock(cx))
             .when(!has_key, |d| {
                 d.child(
                     h_flex()
@@ -2330,7 +2377,20 @@ impl Muralist {
         let bar = title_region(h_flex(), p).gap_3().px(px(GRID_PAD));
 
         match self.tab {
-            Tab::Discover => bar.child(no_drag(self.render_searchbox(cx))).child(no_drag(self.render_view_toggles(cx))),
+            Tab::Discover => bar
+                .child(no_drag(self.render_searchbox(cx)))
+                .child(no_drag(
+                    segmented_track(p).flex_none().child(
+                        kit::Btn::new("save-search")
+                            .icon("bookmark-plus")
+                            .ghost()
+                            .sm()
+                            .tooltip("Save this search as a smart gallery")
+                            .on_click(cx.listener(|this, _, _, cx| this.save_search_as_gallery(cx))),
+                    ),
+                ))
+                .child(no_drag(self.render_view_toggles(cx))),
+            Tab::Galleries => self.render_gallery_bar(bar, cx),
             Tab::Library => {
                 let dir = self.cfg.download_dir.clone();
                 let tints: Vec<Hsla> = self
@@ -2686,6 +2746,14 @@ impl Muralist {
                     cx.notify();
                 }
             }))
+            .on_mouse_down(MouseButton::Right, {
+                let item = item.clone();
+                cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
+                    this.picker = Some(galleries::Picker { item: item.clone(), at: ev.position });
+                    cx.stop_propagation();
+                    cx.notify();
+                })
+            })
             .on_drag(drag::CardDrag { item: item.clone(), thumb: drag_thumb }, |drag, offset, _, cx| {
                 cx.new(|_| drag::DragGhost::new(drag, offset))
             })
@@ -2773,6 +2841,7 @@ impl Muralist {
         let sub = match self.tab {
             Tab::Discover => format!("{count} wallpapers for these filters"),
             Tab::Library | Tab::History => format!("{count} wallpapers in your library"),
+            Tab::Galleries => format!("{count} wallpapers in this gallery"),
         };
         let line = |flip: bool| {
             let (a, b) = if flip {
@@ -2888,6 +2957,7 @@ impl Muralist {
         };
 
         match self.tab {
+            Tab::Galleries => self.render_gallery_empty(cx),
             Tab::Library | Tab::History => shell(
                 hero("folder-open", p.accent),
                 "Your library is empty",
@@ -3332,12 +3402,25 @@ impl Muralist {
             return empty;
         };
         let preview = self.render_preview(&item, cx);
+        let save = self.gallery_button("inspector-gallery", &item, cx).sm();
 
         match item {
             Item::Local(path) => v_flex()
                 .gap_3()
                 .child(preview)
-                .child(div().font_weight(FontWeight::SEMIBOLD).truncate().child(file_name(&path)))
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .truncate()
+                                .child(file_name(&path)),
+                        )
+                        .child(save),
+                )
                 .into_any_element(),
             Item::Remote(w) => {
                 let pc = purity_color(&w.purity);
@@ -3369,7 +3452,8 @@ impl Muralist {
                                     .text_color(p.muted)
                                     .child(icon("heart").size_3p5())
                                     .child(compact_count(w.favorites)),
-                            ),
+                            )
+                            .child(save),
                     )
                     .into_any_element();
                 head
@@ -4109,7 +4193,62 @@ impl Muralist {
                                     save_cfg(this);
                                     cx.notify();
                                 })),
-                        ),
+                        )
+                        .when(!self.galleries.list.is_empty(), |d| {
+                            d.child(
+                                segment(
+                                    "rot-src-gallery",
+                                    "Gallery",
+                                    matches!(source, crate::config::RotateSource::Gallery(_)),
+                                    p,
+                                )
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    let id = this.gallery.filter(|id| this.galleries.get(*id).is_some()).or(this
+                                        .galleries
+                                        .list
+                                        .first()
+                                        .map(|g| g.id));
+                                    if let Some(id) = id {
+                                        this.cfg.rotate_source = crate::config::RotateSource::Gallery(id);
+                                        this.cfg.rotate_cursor = 0;
+                                        save_cfg(this);
+                                    }
+                                    cx.notify();
+                                })),
+                            )
+                        }),
+                )
+                .when_some(
+                    match source {
+                        crate::config::RotateSource::Gallery(id) => Some(id),
+                        _ => None,
+                    },
+                    |d, current| {
+                        let order = self.cfg.rotate_order;
+                        let picks = self.galleries.list.iter().map(|g| {
+                            let id = g.id;
+                            opt(("rot-gallery", id), g.name.clone(), id == current, None, p).on_click(cx.listener(
+                                move |this, _, _, cx| {
+                                    this.cfg.rotate_source = crate::config::RotateSource::Gallery(id);
+                                    this.cfg.rotate_cursor = 0;
+                                    save_cfg(this);
+                                    cx.notify();
+                                },
+                            ))
+                        });
+                        let order_seg = |id: &'static str, label: &'static str, o: crate::config::RotateOrder| {
+                            segment(id, label, order == o, p).on_click(cx.listener(move |this, _, _, cx| {
+                                this.cfg.rotate_order = o;
+                                save_cfg(this);
+                                cx.notify();
+                            }))
+                        };
+                        d.child(opt_grid(3).children(picks)).child(
+                            segmented_track(p)
+                                .child(order_seg("rot-shuffle", "Shuffle", crate::config::RotateOrder::Shuffle))
+                                .child(order_seg("rot-in-order", "In order", crate::config::RotateOrder::InOrder)),
+                        )
+                    },
                 )
                 .child(
                     toggle_row(
@@ -4470,6 +4609,7 @@ impl Render for Muralist {
         let peek_badge = self.render_peek_badge();
         let lightbox = self.lightbox.then(|| self.render_lightbox(window, cx));
         let settings = self.settings_open.then(|| self.render_settings(cx));
+        let picker = self.render_picker(cx);
         let span_editor = self.render_span_editor(cx);
 
         h_flex()
@@ -4517,6 +4657,7 @@ impl Render for Muralist {
             )
             .child(inspector)
             .children(lightbox)
+            .children(picker)
             .children(toast)
             .children(peek_badge)
             .children(span_editor)

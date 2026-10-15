@@ -9,7 +9,7 @@ use std::time::Duration;
 use anyhow::{Context as _, Result, anyhow, bail};
 use reqwest::StatusCode;
 use reqwest::header::{ACCEPT_RANGES, CONTENT_LENGTH, RANGE};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 const BASE: &str = "https://wallhaven.cc/api/v1";
 
@@ -178,7 +178,7 @@ struct SettingsResponse {
     data: UserSettings,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Wallpaper {
     pub id: String,
     pub url: String,
@@ -201,7 +201,7 @@ impl Wallpaper {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Thumbs {
     /// Same aspect ratio as the original (the others are cropped).
     pub original: String,
@@ -215,6 +215,20 @@ pub struct Meta {
     pub total: u64,
     #[serde(default)]
     pub seed: Option<String>,
+}
+
+/// One of the account's collections on Wallhaven.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Collection {
+    pub id: u64,
+    pub label: String,
+    #[serde(default)]
+    pub count: u64,
+}
+
+#[derive(Deserialize)]
+struct CollectionsResponse {
+    data: Vec<Collection>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -350,6 +364,39 @@ impl Client {
             s => bail!("HTTP {s}"),
         }
         Ok(resp.json::<InfoResponse>()?.data)
+    }
+
+    /// The account's collections. Needs an API key.
+    pub fn collections(&self) -> Result<Vec<Collection>> {
+        if self.api_key.is_none() {
+            bail!("importing collections needs an API key");
+        }
+        let resp = self.get(&format!("{BASE}/collections")).send().context("collections request failed")?;
+        match resp.status().as_u16() {
+            200 => {}
+            401 => bail!("Wallhaven rejected the API key (401)"),
+            429 => bail!("Rate limited by Wallhaven (45 requests/min), wait a moment"),
+            s => bail!("Wallhaven returned HTTP {s}"),
+        }
+        Ok(resp.json::<CollectionsResponse>().context("decoding collections")?.data)
+    }
+
+    /// One page of wallpapers in `user`'s collection `id`.
+    pub fn collection(&self, user: &str, id: u64, purity: [bool; 3], page: u32) -> Result<SearchResponse> {
+        let query = [("purity", bits(purity)), ("page", page.to_string())];
+        let resp = self
+            .get(&format!("{BASE}/collections/{user}/{id}"))
+            .query(&query)
+            .send()
+            .context("collection request failed")?;
+        match resp.status().as_u16() {
+            200 => {}
+            401 => bail!("Wallhaven rejected the API key (401)"),
+            404 => bail!("no collection {id} for user {user}"),
+            429 => bail!("Rate limited by Wallhaven (45 requests/min), wait a moment"),
+            s => bail!("Wallhaven returned HTTP {s}"),
+        }
+        resp.json().context("decoding collection")
     }
 
     pub fn settings(&self) -> Result<UserSettings> {

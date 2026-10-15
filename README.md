@@ -44,6 +44,18 @@ wallpaper.
 - History of everything you have set, ready to restore.
 - Hold Space to preview a wallpaper on your real desktop, and let go to revert.
 
+**Galleries**
+
+- Collect wallpapers into galleries: right-click a card, use the bookmark
+  button, or drag a card onto a gallery. While you drag, your galleries rise
+  from the bottom of the sidebar as drop targets.
+- Smart galleries: save any search, and the gallery keeps its top results,
+  refreshing itself daily.
+- Import your Wallhaven collections as galleries.
+- Keep a gallery offline: its full-size originals are downloaded in the
+  background so rotation never waits on the network.
+- Rotate from a gallery, shuffled (matched to the time of day) or in order.
+
 **Interface**
 
 - The whole UI takes on the selected wallpaper's colors, with text contrast
@@ -121,6 +133,7 @@ environment, which takes precedence over the file.
 Other files:
 
 - `~/.config/muralist/state.json`: what is on each monitor, plus history.
+- `~/.config/muralist/galleries.json`: your galleries.
 - `~/.cache/muralist/`: thumbnails and sliced span images. Safe to clear from
   the settings dialog.
 

@@ -1,5 +1,6 @@
 mod backend;
 mod config;
+mod gallery;
 mod monitors;
 mod span;
 mod thumbs;

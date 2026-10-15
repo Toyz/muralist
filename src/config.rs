@@ -44,6 +44,17 @@ pub enum RotateSource {
     Search,
     /// Wallpapers already downloaded.
     Library,
+    /// One of the galleries, by ID.
+    Gallery(u64),
+}
+
+/// The order a gallery plays in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum RotateOrder {
+    #[default]
+    Shuffle,
+    InOrder,
 }
 
 /// How the results grid is laid out.
@@ -96,6 +107,11 @@ pub struct Config {
     pub rotate_match_time: bool,
     /// Rotate the lock screen too.
     pub rotate_lock: bool,
+    pub rotate_order: RotateOrder,
+    /// Where in-order playback of a gallery is up to.
+    pub rotate_cursor: usize,
+    /// For importing collections; the API key alone doesn't reveal it.
+    pub wallhaven_user: String,
     pub spoiler: Spoiler,
     /// Hovering a hidden card reveals it; off means only selecting does.
     pub spoiler_hover: bool,
@@ -166,6 +182,9 @@ impl Default for Config {
             rotate_source: RotateSource::default(),
             rotate_match_time: true,
             rotate_lock: false,
+            rotate_order: RotateOrder::default(),
+            rotate_cursor: 0,
+            wallhaven_user: String::new(),
             spoiler: Spoiler::default(),
             spoiler_hover: true,
             recent: Vec::new(),

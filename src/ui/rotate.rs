@@ -13,7 +13,8 @@ use gpui_kit::*;
 use super::slot::{fits_one_screen, lab, palette, palette_distance};
 use super::{Muralist, adaptive};
 use crate::backend::Session;
-use crate::config::{LockMode, RotateSource, cache_dir};
+use crate::config::{LockMode, RotateOrder, RotateSource, cache_dir};
+use crate::gallery::{Entry, Gallery};
 use crate::monitors::Monitor;
 use crate::span;
 use crate::wallhaven::{Client, SearchParams, Sorting, Wallpaper};
@@ -56,27 +57,99 @@ struct Job {
     download_dir: PathBuf,
     library: Vec<PathBuf>,
     source: RotateSource,
+    /// The gallery behind `RotateSource::Gallery`, captured up front.
+    gallery: Option<Gallery>,
+    order: RotateOrder,
+    cursor: usize,
     match_time: bool,
     lock: Option<LockMode>,
 }
 
 impl Job {
-    fn run(self) -> Result<BTreeMap<String, PathBuf>> {
+    /// Puts up a new set. Also returns where in-order playback is up to.
+    fn run(self) -> Result<(BTreeMap<String, PathBuf>, Option<usize>)> {
         let mut seed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos() as u64)
             .unwrap_or(7)
             | 1;
         let (lo, hi) = if self.match_time { wanted_brightness() } else { (0., 1.) };
-        let map = match self.source {
-            RotateSource::Search => self.from_search(lo, hi, &mut seed)?,
-            RotateSource::Library => self.from_library(lo, hi, &mut seed)?,
+        let (map, cursor) = match self.source {
+            RotateSource::Search => (self.from_search(lo, hi, &mut seed)?, None),
+            RotateSource::Library => (self.from_library(lo, hi, &mut seed)?, None),
+            RotateSource::Gallery(_) => {
+                let gallery = self.gallery.as_ref().context("that gallery no longer exists")?;
+                self.from_gallery(gallery, lo, hi, &mut seed)?
+            }
         };
         self.backend.desktop().context("no desktop backend")?.set(&map, &self.monitors)?;
         if let (Some(mode), Some(lock)) = (self.lock, self.backend.lock()) {
             lock.apply(&map, &self.monitors, mode)?;
         }
-        Ok(map)
+        Ok((map, cursor))
+    }
+
+    fn from_gallery(
+        &self,
+        gallery: &Gallery,
+        lo: f32,
+        hi: f32,
+        seed: &mut u64,
+    ) -> Result<(BTreeMap<String, PathBuf>, Option<usize>)> {
+        let items = &gallery.items;
+        if items.is_empty() {
+            bail!("the gallery \"{}\" is empty", gallery.name);
+        }
+        let n = self.monitors.len();
+        let (picks, cursor): (Vec<&Entry>, Option<usize>) = match self.order {
+            RotateOrder::InOrder => {
+                let start = self.cursor % items.len();
+                ((0..n).map(|i| &items[(start + i) % items.len()]).collect(), Some((start + n) % items.len()))
+            }
+            RotateOrder::Shuffle => {
+                // Wallhaven ships each image's palette; local files are measured.
+                let scored: Vec<(&Entry, f32)> = items
+                    .iter()
+                    .map(|e| {
+                        let b = match e {
+                            Entry::Wallhaven(w) => brightness(&palette(w)),
+                            Entry::Local(p) => {
+                                brightness(&adaptive::image_palette(p).into_iter().map(lab).collect::<Vec<_>>())
+                            }
+                        };
+                        (e, b)
+                    })
+                    .collect();
+                let mut pool: Vec<&Entry> =
+                    scored.iter().filter(|(_, b)| (lo..=hi).contains(b)).map(|(e, _)| *e).collect();
+                if pool.is_empty() {
+                    pool = items.iter().collect();
+                }
+                let mut picks = Vec::new();
+                for _ in 0..n {
+                    let ix = (rng(seed) % pool.len() as u64) as usize;
+                    picks.push(if pool.len() > 1 { pool.remove(ix) } else { pool[0] });
+                }
+                (picks, None)
+            }
+        };
+        let mut map = BTreeMap::new();
+        for (m, entry) in self.monitors.iter().zip(picks) {
+            map.insert(m.name.clone(), self.original(entry)?);
+        }
+        Ok((map, cursor))
+    }
+
+    /// The entry's full-size original, downloading it if needed.
+    fn original(&self, entry: &Entry) -> Result<PathBuf> {
+        let path = entry.original(&self.download_dir);
+        match entry {
+            Entry::Wallhaven(w) if !path.is_file() => {
+                self.client.download_parallel(&w.path, &path, &Default::default())
+            }
+            Entry::Local(p) if !p.is_file() => bail!("{} is missing", p.display()),
+            _ => Ok(path),
+        }
     }
 
     fn from_search(&self, lo: f32, hi: f32, seed: &mut u64) -> Result<BTreeMap<String, PathBuf>> {
@@ -186,6 +259,11 @@ impl Muralist {
     }
 
     pub(super) fn rotate_now(&mut self, cx: &mut Context<Self>) {
+        self.rotate_from(self.cfg.rotate_source, cx);
+    }
+
+    /// Puts up a new set from `source`, whatever auto-rotate is set to.
+    pub(super) fn rotate_from(&mut self, source: RotateSource, cx: &mut Context<Self>) {
         if self.rotating || self.monitors.is_empty() {
             return;
         }
@@ -210,7 +288,13 @@ impl Muralist {
             monitors: self.monitors.clone(),
             download_dir: self.cfg.download_dir.clone(),
             library: self.library.clone(),
-            source: self.cfg.rotate_source,
+            source,
+            gallery: match source {
+                RotateSource::Gallery(id) => self.galleries.get(id).cloned(),
+                _ => None,
+            },
+            order: self.cfg.rotate_order,
+            cursor: self.cfg.rotate_cursor,
             match_time: self.cfg.rotate_match_time,
             lock: self.cfg.rotate_lock.then_some(self.cfg.lock_mode),
         };
@@ -222,7 +306,13 @@ impl Muralist {
                 this.rotating = false;
                 this.last_rotation = Instant::now();
                 match result {
-                    Ok(map) => {
+                    Ok((map, cursor)) => {
+                        if let Some(cursor) = cursor {
+                            this.cfg.rotate_cursor = cursor;
+                            if let Err(e) = this.cfg.save() {
+                                eprintln!("saving config: {e:#}");
+                            }
+                        }
                         this.applied.record("desktop", &map);
                         this.applied.desktop = map.clone();
                         this.desktop = map.clone();

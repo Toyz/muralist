@@ -947,6 +947,7 @@ impl Muralist {
     /// Floating glass dock over the image: where it goes and how.
     fn render_lb_dock(&mut self, item: &Item, cx: &mut Context<Self>) -> AnyElement {
         let p = pal();
+        let save_btn = self.gallery_button("lb-gallery", item, cx);
         let mode = self.target;
         let lock_ok = self.backend.lock().is_some();
         let target_seg = |id: &'static str, label: &'static str, m: super::TargetMode| {
@@ -1011,6 +1012,7 @@ impl Muralist {
                             .on_click(cx.listener(|this, _, _, cx| this.open_span_editor(cx)))
                             .render(),
                     )
+                    .child(save_btn.render())
                     .when(remote, |d| {
                         d.child(
                             kit::Btn::new("lb-dl")
