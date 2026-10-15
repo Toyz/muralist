@@ -14,6 +14,7 @@ mod settings;
 mod slot;
 mod smartq;
 mod span_editor;
+mod stage;
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -3642,363 +3643,6 @@ impl Muralist {
         }
     }
 
-    /// Scaled-down picture of the monitor layout; clicking a display stages
-    /// the selected wallpaper on it.
-    fn render_layout(&mut self, target: Target, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let p = pal();
-        if self.monitors.is_empty() {
-            return div().text_color(p.muted).child("No displays detected").into_any_element();
-        }
-        let min_x = self.monitors.iter().map(|m| m.x).min().unwrap();
-        let min_y = self.monitors.iter().map(|m| m.y).min().unwrap();
-        let max_x = self.monitors.iter().map(|m| m.x + m.width as i32).max().unwrap();
-        let max_y = self.monitors.iter().map(|m| m.y + m.height as i32).max().unwrap();
-        let avail_w = INSPECTOR_W - INSPECTOR_PAD * 2. - CARD_PAD * 2. - 2.;
-        let scale = (avail_w / (max_x - min_x) as f32).min(130. / (max_y - min_y) as f32);
-        let gap = 6.;
-
-        let (pending, applied) = match target {
-            Target::Desktop => (self.desktop.clone(), self.applied.desktop.clone()),
-            Target::Lock => (self.lock.clone(), self.applied.lock.clone()),
-        };
-        let has_selection = self.selected.is_some();
-        let dragging = cx.has_active_drag();
-
-        let screens: Vec<_> = self
-            .monitors
-            .clone()
-            .into_iter()
-            .map(|m| {
-                let path = pending.get(&m.name).cloned();
-                let changed = path != applied.get(&m.name).cloned();
-                let reel = self.reel_face(&m.name);
-                let glow_c = path.as_deref().and_then(|p| self.path_glow(p));
-                let thumb = match &reel {
-                    Some((w, _)) => self.remote_thumb(w, false),
-                    None => path.as_deref().and_then(|p| self.local_thumb(p)),
-                };
-                let name = m.name.clone();
-                div()
-                    .id(SharedString::from(format!("mon-{}-{}", target.label(), m.name)))
-                    .absolute()
-                    .left(px((m.x - min_x) as f32 * scale + gap / 2.))
-                    .top(px((m.y - min_y) as f32 * scale + gap / 2.))
-                    .w(px(m.width as f32 * scale - gap))
-                    .h(px(m.height as f32 * scale - gap))
-                    .rounded_lg()
-                    .overflow_hidden()
-                    .bg(p.bg)
-                    .border_2()
-                    .border_color(if changed { p.accent } else { p.border })
-                    .when(has_selection, |d| d.cursor_pointer().hover(move |s| s.border_color(p.accent_hover)))
-                    .map(|d| match thumb {
-                        Some(t) => d.child(radius(img(t).size_full().object_fit(ObjectFit::Cover), 6.)),
-                        None => d.child(
-                            div()
-                                .size_full()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .child(icon("plus").size_4().text_color(p.dim)),
-                        ),
-                    })
-                    // The image's own color as a crisp strip along the bottom.
-                    .when_some(glow_c.filter(|_| reel.is_none()), |d, c| {
-                        d.child(div().absolute().bottom_0().left_0().right_0().h(px(3.)).bg(c))
-                    })
-                    .when_some(reel.clone(), |d, (w, stopped)| {
-                        let d = d.border_color(p.accent);
-                        if stopped {
-                            // The reel lands: one bright flash.
-                            d.child(div().absolute().top_0().left_0().size_full().bg(white()).with_animation(
-                                SharedString::from(format!("reel-stop-{}-{}", m.name, w.id)),
-                                Animation::new(std::time::Duration::from_millis(500)).with_easing(ease_out_quint()),
-                                |d, t| d.opacity(0.7 * (1. - t)),
-                            ))
-                        } else {
-                            // Spinning: darkened reel window edges.
-                            d.child(div().absolute().top_0().left_0().size_full().bg(linear_gradient(
-                                180.,
-                                linear_color_stop(hsla(0., 0., 0., 0.55), 0.),
-                                linear_color_stop(hsla(0., 0., 0., 0.), 0.5),
-                            )))
-                            .child(div().absolute().top_0().left_0().size_full().bg(
-                                linear_gradient(
-                                    0.,
-                                    linear_color_stop(hsla(0., 0., 0., 0.55), 0.),
-                                    linear_color_stop(hsla(0., 0., 0., 0.), 0.5),
-                                ),
-                            ))
-                        }
-                    })
-                    .child(
-                        h_flex()
-                            .absolute()
-                            .bottom_1()
-                            .left_1()
-                            .gap_1()
-                            .px_1p5()
-                            .rounded_md()
-                            .bg(hsla(0., 0., 0., 0.65))
-                            .text_xs()
-                            .text_color(white())
-                            .child(m.name.clone())
-                            .when(m.primary, |d| d.child(icon("star-fill").size_2p5().text_color(hex(0xfbbf24))))
-                            .when(changed, |d| d.child(div().size(px(6.)).rounded_full().bg(p.accent))),
-                    )
-                    .when(dragging, |d| {
-                        d.border_color(with_alpha(p.accent, 0.55))
-                            .child(div().absolute().top_0().left_0().size_full().bg(with_alpha(p.accent, 0.08)))
-                    })
-                    .drag_over::<drag::CardDrag>(move |style, _, _, _| {
-                        style.border_color(p.accent_hover).bg(with_alpha(p.accent, 0.25))
-                    })
-                    .on_drop(cx.listener({
-                        let name = name.clone();
-                        move |this, drag: &drag::CardDrag, window, cx| {
-                            this.select(drag.item.clone(), window, cx);
-                            this.assign_item(drag.item.clone(), vec![target], Placement::Monitor(name.clone()), cx);
-                        }
-                    }))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.assign(vec![target], Placement::Monitor(name.clone()), cx)
-                    }))
-            })
-            .collect();
-
-        div()
-            .relative()
-            .w(px((max_x - min_x) as f32 * scale))
-            .h(px((max_y - min_y) as f32 * scale))
-            .children(screens)
-            .into_any_element()
-    }
-
-    fn render_displays(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let p = pal();
-        let lock_reach = self.backend.lock().map(|w| w.reach());
-        if lock_reach.is_none() {
-            self.target = TargetMode::Desktop;
-        }
-        let lock_ok = lock_reach.is_some();
-        let lock_style_ok = lock_reach == Some(Reach::PerMonitor);
-        if !self.backend.is_supported() {
-            return v_flex()
-                .gap_2()
-                .p(px(CARD_PAD))
-                .rounded_xl()
-                .bg(with_alpha(p.surface2, 0.82))
-                .border_1()
-                .border_color(p.border)
-                .child(
-                    h_flex()
-                        .gap_2()
-                        .child(icon("triangle-alert").size_4().text_color(hex(0xf59e0b)))
-                        .child(div().font_weight(FontWeight::SEMIBOLD).child("Displays")),
-                )
-                .child(div().text_sm().text_color(p.muted).child(format!(
-                    "muralist can't set wallpapers on {} yet. You can still browse and download.",
-                    self.backend.name()
-                )))
-                .into_any_element();
-        }
-        let mode = self.target;
-        let targets = mode.targets();
-        let has_selection = self.selected.is_some();
-        let lock_mode = self.cfg.lock_mode;
-        let involves_lock = mode != TargetMode::Desktop;
-        let can_spin = self.tab == Tab::Discover && !self.results.is_empty() && self.slot.is_none();
-        let busy = self.busy > 0;
-
-        // How many monitors would change on Apply.
-        let changes: usize = targets
-            .iter()
-            .map(|t| {
-                let (pending, applied) = match t {
-                    Target::Desktop => (&self.desktop, &self.applied.desktop),
-                    Target::Lock => (&self.lock, &self.applied.lock),
-                };
-                pending.iter().filter(|(k, v)| applied.get(*k) != Some(*v)).count()
-            })
-            .sum();
-
-        let layouts: Vec<_> = targets
-            .iter()
-            .map(|&t| {
-                let layout = self.render_layout(t, cx);
-                v_flex()
-                    .gap_1p5()
-                    .when(targets.len() > 1, |d| {
-                        d.child(div().text_xs().text_color(p.dim).child(t.label().to_string()))
-                    })
-                    .child(layout)
-            })
-            .collect();
-
-        let target_seg = |id: &'static str, label: &'static str, m: TargetMode| {
-            segment(id, label, mode == m, p).px_2().on_click(cx.listener(move |this, _, _, cx| {
-                this.target = m;
-                cx.notify();
-            }))
-        };
-
-        let tile = |id: &'static str, name: &'static str, label: &'static str, tip: &'static str, enabled: bool| {
-            kit::surface(v_flex(), p)
-                .id(id)
-                .items_center()
-                .justify_center()
-                .gap_1()
-                .h(px(56.))
-                .rounded_lg()
-                .overflow_hidden()
-                .text_xs()
-                .text_color(p.muted)
-                .child(icon(name).size_4().text_color(if enabled { p.accent } else { p.dim }))
-                .child(label)
-                .tooltip(move |window, cx| Tooltip::new(tip).build(window, cx))
-                .map(|d| {
-                    if enabled {
-                        d.cursor_pointer()
-                            .hover(move |s| {
-                                s.bg(with_alpha(p.accent, 0.12))
-                                    .border_color(with_alpha(p.accent, 0.6))
-                                    .text_color(p.fg)
-                            })
-                            .active(|s| s.pt(px(2.)))
-                    } else {
-                        d.opacity(0.4)
-                    }
-                })
-        };
-        let mut tiles = vec![
-            tile(
-                "fill-all",
-                "layout-dashboard",
-                "Fill all",
-                "Put the selected wallpaper on every display",
-                has_selection,
-            )
-            .when(has_selection, |d| {
-                d.on_click(cx.listener(|this, _, _, cx| this.assign(this.target.targets(), Placement::All, cx)))
-            })
-            .into_any_element(),
-            tile("span", "frame", "Span", "Stretch one image across all displays, framed your way", has_selection)
-                .when(has_selection, |d| d.on_click(cx.listener(|this, _, _, cx| this.open_span_editor(cx))))
-                .into_any_element(),
-            tile("spin", "refresh-cw", "Spin", "Random wallpapers for every display, slot-machine style", can_spin)
-                .when(can_spin, |d| d.on_click(cx.listener(|this, _, _, cx| this.spin(cx))))
-                .into_any_element(),
-            tile("harmonize", "palette", "Match", "Pick wallpapers whose colors match the selected one", can_spin)
-                .when(can_spin, |d| d.on_click(cx.listener(|this, _, _, cx| this.harmonize(cx))))
-                .into_any_element(),
-        ];
-        if mode == TargetMode::Lock {
-            tiles.push(
-                tile("copy-desktop", "copy", "Copy", "Use the desktop's wallpapers on the lock screen", true)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.lock = this.desktop.clone();
-                        cx.notify();
-                    }))
-                    .into_any_element(),
-            );
-        }
-        let cols = tiles.len() as u16;
-
-        let fetching = self.landing.len();
-        let apply = (changes > 0 || busy).then(|| {
-            kit::Btn::new("apply")
-                .label(if fetching > 0 {
-                    format!("Fetching {fetching} wallpaper{}", if fetching == 1 { "" } else { "s" })
-                } else {
-                    format!("Apply {changes} change{}", if changes == 1 { "" } else { "s" })
-                })
-                .icon("check")
-                .primary()
-                .lg()
-                .full()
-                .loading(busy)
-                .on_click(cx.listener(|this, _, _, cx| this.apply(this.target.targets(), cx)))
-                .into_any_element()
-        });
-
-        v_flex()
-            .gap_3()
-            .p(px(CARD_PAD))
-            .rounded_xl()
-            .bg(with_alpha(p.surface2, 0.82))
-            .border_1()
-            .border_color(p.border)
-            .child(
-                h_flex()
-                    .justify_between()
-                    .gap_2()
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .child(icon("layout-dashboard").size_4().text_color(p.accent))
-                            .child(div().font_weight(FontWeight::SEMIBOLD).child("Displays"))
-                            .when(changes == 0 && !busy, |d| {
-                                d.child(
-                                    h_flex()
-                                        .gap_1()
-                                        .text_xs()
-                                        .text_color(p.dim)
-                                        .child(icon("circle-check").size_3().text_color(p.ok))
-                                        .child("up to date"),
-                                )
-                            }),
-                    )
-                    .when(lock_ok, |d| {
-                        d.child(
-                            segmented_track(p)
-                                .child(target_seg("tm-desktop", "Desktop", TargetMode::Desktop))
-                                .child(target_seg("tm-lock", "Lock", TargetMode::Lock))
-                                .child(target_seg("tm-both", "Both", TargetMode::Both)),
-                        )
-                    }),
-            )
-            .children(layouts)
-            .child(div().grid().grid_cols(cols).gap_2().children(tiles))
-            .when(involves_lock && lock_style_ok, |d| {
-                d.child(
-                    h_flex()
-                        .justify_between()
-                        .gap_2()
-                        .child(div().text_xs().text_color(p.dim).child("Lock screen"))
-                        .child(
-                            segmented_track(p)
-                                .child(
-                                    segment("lm-per", "Per display", lock_mode == LockMode::PerMonitor, p)
-                                        .px_2()
-                                        .on_click(
-                                            cx.listener(|this, _, _, cx| this.set_lock_mode(LockMode::PerMonitor, cx)),
-                                        ),
-                                )
-                                .child(
-                                    segment("lm-single", "One image", lock_mode == LockMode::Single, p)
-                                        .px_2()
-                                        .on_click(
-                                            cx.listener(|this, _, _, cx| this.set_lock_mode(LockMode::Single, cx)),
-                                        ),
-                                ),
-                        ),
-                )
-            })
-            .children(apply)
-            .when_some(self.rotation_countdown(), |d, countdown| {
-                d.child(
-                    h_flex()
-                        .justify_center()
-                        .gap_1p5()
-                        .text_xs()
-                        .text_color(p.dim)
-                        .child(icon("refresh-cw").size_3())
-                        .child(format!("Auto-rotating every {} min  ·  {countdown}", self.cfg.rotate_minutes)),
-                )
-            })
-            .into_any_element()
-    }
-
     fn render_inspector(&mut self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let p = pal();
         let details = self.render_details(cx);
@@ -4032,7 +3676,7 @@ impl Muralist {
         let tabs = selected.as_ref().map(|item| {
             let remote = matches!(item, Item::Remote(_));
             segmented_track(p)
-                .child(tab_seg("it-set", "Set".into(), InspectorTab::Set))
+                .child(tab_seg("it-set", "Use".into(), InspectorTab::Set))
                 .child(tab_seg("it-info", "Info".into(), InspectorTab::Info))
                 .when(remote, |d| {
                     d.child(tab_seg(
@@ -4067,7 +3711,7 @@ impl Muralist {
                     div().text_sm().text_color(p.dim).child("No similar wallpapers found").into_any_element()
                 })
             }
-            _ => self.render_displays(cx).into_any_element(),
+            _ => self.render_put_on(cx),
         };
         let tab_key = match tab {
             InspectorTab::Set => "set",
@@ -4242,6 +3886,7 @@ impl Render for Muralist {
         let topbar = self.render_topbar(cx);
         let query_chips = if self.tab == Tab::Discover { self.render_query_chips(cx) } else { None };
         let recent = if self.tab == Tab::Discover { self.render_recent(cx) } else { None };
+        let stage = self.render_stage(viewport_w - frame - SIDEBAR_W - INSPECTOR_W, cx);
         let grid = if self.tab == Tab::History {
             self.render_history(cx)
         } else {
@@ -4300,6 +3945,7 @@ impl Render for Muralist {
                     .child(topbar)
                     .children(query_chips)
                     .child(grid)
+                    .child(stage)
                     .children(recent),
             )
             .child(inspector)
