@@ -351,6 +351,75 @@ fn side_card_with(icon_name: &str, title: &str, p: Pal, right: impl FnOnce(Div) 
         .child(right(head).min_w_0().gap_2())
 }
 
+/// The faint color wash behind a top-bar field, from the dominant colors of
+/// what the tab is showing.
+fn field_wash(tints: &[Hsla], p: Pal) -> Background {
+    let (a, b) = match tints {
+        [] => (p.surface2, p.surface2),
+        [only] => (*only, p.surface2),
+        [first, .., last] => (*first, *last),
+    };
+    let wash = |c: Hsla| Hsla { l: (c.l * 0.35).min(0.2), s: (c.s * 0.8).min(0.6), a: 1., ..c };
+    linear_gradient(90., linear_color_stop(wash(a), 0.), linear_color_stop(wash(b), 1.))
+}
+
+/// Every tab's top bar leads with a field shaped like the search box.
+fn bar_field(id: &'static str, tints: &[Hsla], p: Pal) -> Stateful<Div> {
+    h_flex()
+        .id(id)
+        .flex_1()
+        .min_w_0()
+        .h(px(38.))
+        .gap_2()
+        .px_3()
+        .rounded_lg()
+        .border_1()
+        .border_color(p.border_strong)
+        .bg(field_wash(tints, p))
+}
+
+/// A path as clickable breadcrumbs, home shortened to `~`.
+fn path_crumbs(id: &'static str, path: &Path, p: Pal) -> Stateful<Div> {
+    let (root, rest) = match dirs::home_dir().and_then(|h| path.strip_prefix(&h).ok().map(Path::to_path_buf)) {
+        Some(rel) => ("~".to_owned(), rel),
+        None => (String::new(), path.to_path_buf()),
+    };
+    let parts: Vec<String> = std::iter::once(root)
+        .chain(rest.components().filter_map(|c| match c {
+            std::path::Component::Normal(s) => Some(s.to_string_lossy().into_owned()),
+            _ => None,
+        }))
+        .filter(|s| !s.is_empty())
+        .collect();
+    let last = parts.len().saturating_sub(1);
+    h_flex()
+        .id(id)
+        .min_w_0()
+        .overflow_hidden()
+        .gap_1()
+        .px_1p5()
+        .h(px(24.))
+        .rounded_md()
+        .text_sm()
+        .cursor_pointer()
+        .hover(move |s| s.bg(with_alpha(p.elevated, 0.8)))
+        .children(parts.into_iter().enumerate().flat_map(move |(i, part)| {
+            let sep = (i > 0).then(|| div().flex_none().text_color(p.dim).child("/").into_any_element());
+            let name = div()
+                .flex_none()
+                .text_color(if i == last { p.fg } else { p.muted })
+                .when(i == last, |d| d.font_weight(FontWeight::MEDIUM))
+                .child(part)
+                .into_any_element();
+            sep.into_iter().chain(std::iter::once(name))
+        }))
+}
+
+/// A key, drawn like a keycap.
+fn keycap(label: &'static str, p: Pal) -> Div {
+    div().px_1().rounded_sm().border_1().border_color(p.border_strong).text_xs().text_color(p.dim).child(label)
+}
+
 /// A small label over a group inside a card.
 fn sub_label(title: &str, p: Pal) -> Div {
     v_flex().gap_1p5().child(div().text_xs().text_color(p.dim).child(title.to_owned()))
@@ -2264,39 +2333,103 @@ impl Muralist {
             Tab::Discover => bar.child(no_drag(self.render_searchbox(cx))).child(no_drag(self.render_view_toggles(cx))),
             Tab::Library => {
                 let dir = self.cfg.download_dir.clone();
-                bar.child(
-                    v_flex()
-                        .flex_1()
-                        .min_w_0()
-                        .child(div().font_weight(FontWeight::SEMIBOLD).child("Library"))
-                        .child(div().text_xs().text_color(p.dim).truncate().child(dir.display().to_string())),
-                )
-                .child(
-                    no_drag(button("open-dir", "Open folder", BtnKind::Secondary, p))
-                        .on_click(move |_, _, cx| cx.open_url(&format!("file://{}", dir.display()))),
-                )
-                .child(no_drag(button("refresh", "Refresh", BtnKind::Secondary, p)).on_click(
-                    cx.listener(|this, _, _, cx| {
-                        this.refresh_library();
-                        cx.notify();
-                    }),
-                ))
+                let tints: Vec<Hsla> = self
+                    .library
+                    .iter()
+                    .take(8)
+                    .filter_map(|path| self.local_palettes.get(path).and_then(|c| c.first().copied()))
+                    .collect();
+                let n = self.library.len();
+                let open_dir = {
+                    let dir = dir.clone();
+                    move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+                        cx.open_url(&format!("file://{}", dir.display()))
+                    }
+                };
+                let field = bar_field("library-field", &tints, p)
+                    .child(icon("folder").size_4().flex_none().text_color(p.accent))
+                    .child(div().flex_none().font_weight(FontWeight::SEMIBOLD).child("Library"))
+                    .child(
+                        no_drag(path_crumbs("library-path", &dir, p))
+                            .tooltip(|window, cx| Tooltip::new("Open folder").build(window, cx))
+                            .on_click(open_dir.clone()),
+                    )
+                    .child(div().flex_1())
+                    .child(div().flex_none().text_xs().text_color(p.dim).child(format!(
+                        "{} wallpaper{}",
+                        thousands(n as u64),
+                        if n == 1 { "" } else { "s" }
+                    )));
+                let actions = segmented_track(p)
+                    .flex_none()
+                    .child(
+                        kit::Btn::new("open-dir")
+                            .icon("folder-open")
+                            .ghost()
+                            .sm()
+                            .tooltip("Open folder")
+                            .on_click(open_dir),
+                    )
+                    .child(kit::Btn::new("refresh").icon("refresh-cw").ghost().sm().tooltip("Rescan folder").on_click(
+                        cx.listener(|this, _, _, cx| {
+                            this.refresh_library();
+                            cx.notify();
+                        }),
+                    ));
+                bar.child(no_drag(field)).child(no_drag(actions)).child(no_drag(self.render_view_toggles(cx)))
             }
             Tab::History => {
                 let n = self.applied.history.len();
-                bar.child(
-                    v_flex().flex_1().min_w_0().child(div().font_weight(FontWeight::SEMIBOLD).child("History")).child(
-                        div().text_xs().text_color(p.dim).child(format!(
-                            "{n} change{}  ·  hover one and hold Space to peek it on your desktop",
-                            if n == 1 { "" } else { "s" }
-                        )),
-                    ),
-                )
-                .when(n > 0, |d| {
-                    d.child(
-                        no_drag(kit::Btn::new("clear-history").label("Clear").icon("delete").danger().sm().render())
-                            .on_click(cx.listener(|this, _, _, cx| this.clear_history(cx))),
-                    )
+                let tints: Vec<Hsla> = self
+                    .applied
+                    .history
+                    .iter()
+                    .rev()
+                    .take(8)
+                    .filter_map(|e| {
+                        e.images.values().next().and_then(|path| self.local_palettes.get(path)).and_then(|c| c.first())
+                    })
+                    .copied()
+                    .collect();
+                let since = self
+                    .applied
+                    .history
+                    .first()
+                    .and_then(|e| chrono::DateTime::from_timestamp(e.at, 0))
+                    .map(|t| format!("since {}", t.with_timezone(&chrono::Local).format("%b %-d")));
+                let field = bar_field("history-field", &tints, p)
+                    .child(icon("calendar").size_4().flex_none().text_color(p.accent))
+                    .child(div().flex_none().font_weight(FontWeight::SEMIBOLD).child("History"))
+                    .child(div().min_w_0().truncate().text_sm().text_color(p.muted).child(match (n, since) {
+                        (0, _) => "Nothing set yet".to_owned(),
+                        (n, Some(since)) => {
+                            format!("{} set{} {since}", thousands(n as u64), if n == 1 { "" } else { "s" })
+                        }
+                        (n, None) => format!("{} set{}", thousands(n as u64), if n == 1 { "" } else { "s" }),
+                    }))
+                    .child(div().flex_1())
+                    .when(n > 0, |d| {
+                        d.child(
+                            h_flex()
+                                .flex_none()
+                                .gap_1p5()
+                                .text_xs()
+                                .text_color(p.dim)
+                                .child(keycap("Space", p))
+                                .child("hold over one to peek"),
+                        )
+                    });
+                bar.child(no_drag(field)).when(n > 0, |d| {
+                    d.child(no_drag(
+                        segmented_track(p).flex_none().child(
+                            kit::Btn::new("clear-history")
+                                .icon("delete")
+                                .ghost()
+                                .sm()
+                                .tooltip("Clear history")
+                                .on_click(cx.listener(|this, _, _, cx| this.clear_history(cx))),
+                        ),
+                    ))
                 })
             }
         }

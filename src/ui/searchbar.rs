@@ -63,27 +63,13 @@ impl Muralist {
         // Tint: the dominant colors of the first few results, faintly.
         let tints: Vec<Hsla> =
             self.results.iter().take(8).filter_map(|w| w.colors.first().and_then(|c| parse_hex(c))).collect();
-        let (a, b) = match tints.as_slice() {
-            [] => (p.surface2, p.surface2),
-            [only] => (*only, p.surface2),
-            [first, .., last] => (*first, *last),
-        };
-        let wash = |c: Hsla| Hsla { l: (c.l * 0.35).min(0.2), s: (c.s * 0.8).min(0.6), a: 1., ..c };
 
         let count = (self.total > 0).then(|| thousands(self.total));
         let suffix = h_flex().gap_2().children(count.map(|c| div().text_xs().text_color(p.dim).child(c))).child(
             if self.searching {
                 Spinner::new().xsmall().color(p.accent).into_any_element()
             } else {
-                div()
-                    .px_1()
-                    .rounded_sm()
-                    .border_1()
-                    .border_color(p.border_strong)
-                    .text_xs()
-                    .text_color(p.dim)
-                    .child("Enter")
-                    .into_any_element()
+                super::keycap("Enter", p).into_any_element()
             },
         );
 
@@ -133,7 +119,7 @@ impl Muralist {
             .rounded_lg()
             .border_1()
             .border_color(if self.search_focused { with_alpha(p.accent, 0.7) } else { p.border_strong })
-            .bg(linear_gradient(90., linear_color_stop(wash(a), 0.), linear_color_stop(wash(b), 1.)))
+            .bg(super::field_wash(&tints, p))
             .drag_over::<ExternalPaths>(move |s, _, _, _| s.border_color(p.accent).bg(with_alpha(p.accent, 0.18)))
             .drag_over::<drag::CardDrag>(move |s, _, _, _| s.border_color(p.accent).bg(with_alpha(p.accent, 0.18)))
             .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
