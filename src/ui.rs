@@ -2255,9 +2255,6 @@ impl Muralist {
                     linear_color_stop(with_alpha(c, if on { 0.35 } else { 0.12 }), 0.),
                     linear_color_stop(p.surface2, 1.),
                 ))
-                .border_1()
-                .border_color(if on { with_alpha(c, 0.75) } else { with_alpha(p.border, 0.) })
-                .when(!on, |d| d.hover(move |s| s.border_color(with_alpha(c, 0.45))))
                 .when(empty, |d| {
                     d.child(
                         div()
@@ -2304,6 +2301,17 @@ impl Muralist {
                         },
                     ))
                 })
+                // The edge goes on last: a border on the tile itself is painted
+                // under its images, which then spill over it.
+                .child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .map(|d| radius(d, NAV_TILE_R))
+                        .border_1()
+                        .border_color(if on { with_alpha(c, 0.75) } else { with_alpha(p.border, 0.5) })
+                        .when(!on, |d| d.group_hover(group.clone(), move |s| s.border_color(with_alpha(c, 0.5)))),
+                )
                 .children(counts[ix].clone().map(|count| {
                     div()
                         .absolute()
